@@ -22,6 +22,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/diff"
 	"github.com/jmo/terminal-redeemer/internal/doctor"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/mirror"
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/niri"
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
@@ -69,6 +70,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runCapture(args[1:], resolvedConfig, stdout, stderr)
 	case "history":
 		return runHistory(args[1:], resolvedConfig, stdout, stderr)
+	case "mirror":
+		return runMirror(args[1:], resolvedConfig, stdout, stderr)
 	case "restore":
 		return runRestore(args[1:], resolvedConfig, stdout, stderr)
 	case "prune":
@@ -114,6 +117,76 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 	if doctor.HasFailures(results) {
 		return 1
 	}
+	return 0
+}
+
+func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot> [flags]")
+		return 2
+	}
+	if isHelpToken(args[0]) {
+		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot> [flags]")
+		return 0
+	}
+	if args[0] != "snapshot" {
+		_, _ = fmt.Fprintf(stderr, "unknown mirror subcommand: %s\n", args[0])
+		return 2
+	}
+
+	fs := flag.NewFlagSet("mirror snapshot", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host := fs.String("host", resolvedConfig.Host, "host identifier")
+	profile := fs.String("profile", resolvedConfig.Profile, "profile name")
+	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "niri JSON fixture path")
+	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "niri snapshot command")
+	processWhitelist := fs.String("process-whitelist", strings.Join(resolvedConfig.ProcessMetadata.Whitelist, ","), "comma-separated process tags")
+	processWhitelistExtra := fs.String("process-whitelist-extra", strings.Join(resolvedConfig.ProcessMetadata.WhitelistExtra, ","), "comma-separated extra process tags")
+	includeSessionTag := fs.Bool("include-session-tag", resolvedConfig.ProcessMetadata.IncludeSessionTag, "include terminal session tags")
+	outputPath := fs.String("output", "", "optional output file path")
+	if err := fs.Parse(args[1:]); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if strings.TrimSpace(*fixture) == "" && strings.TrimSpace(*niriCmd) == "" {
+		_, _ = fmt.Fprintln(stderr, "mirror snapshot requires --fixture or --niri-cmd")
+		return 2
+	}
+
+	snapshot, err := mirror.Capture(context.Background(), mirror.Options{
+		Host:        *host,
+		Profile:     *profile,
+		NiriCommand: *niriCmd,
+		FixturePath: *fixture,
+		ProcessMetadata: procmeta.Config{
+			Whitelist:         splitCSV(*processWhitelist),
+			WhitelistExtra:    splitCSV(*processWhitelistExtra),
+			IncludeSessionTag: *includeSessionTag,
+		},
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror snapshot failed: %v\n", err)
+		return 1
+	}
+
+	payload, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror snapshot encode failed: %v\n", err)
+		return 1
+	}
+	payload = append(payload, '\n')
+
+	if strings.TrimSpace(*outputPath) != "" {
+		if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
+			_, _ = fmt.Fprintf(stderr, "mirror snapshot write failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	_, _ = stdout.Write(payload)
 	return 0
 }
 
@@ -932,6 +1005,7 @@ func printHelp(w io.Writer) {
 	writeln(w, "  capture   Capture window/session state")
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
+	writeln(w, "  mirror    Emit live window/session mirror metadata")
 	writeln(w, "  prune     Prune old events/snapshots")
 	writeln(w, "  bottle    Bottle workflows (V2)")
 	writeln(w, "  doctor    Basic environment checks")

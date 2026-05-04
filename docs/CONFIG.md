@@ -26,11 +26,11 @@ Core:
 - `host`
 - `profile`
 
-Capture:
+Capture and mirror:
 
 - `capture.interval`
 - `capture.snapshotEvery`
-- `capture.niriCommand`
+- `capture.niriCommand` (also used by `mirror snapshot` unless `--niri-cmd` is passed)
 
 Process metadata:
 

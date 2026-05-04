@@ -11,6 +11,7 @@ Current CLI behavior is implemented and covered by tests:
 - capture (`once`, `run`)
 - history (`list`, `inspect`)
 - restore (`apply`, `tui`)
+- mirror metadata export (`mirror snapshot`)
 - prune (`run`)
 - doctor (`doctor`)
 - Home Manager module scaffolding and eval checks
@@ -62,6 +63,22 @@ redeem restore apply --at 10m --yes
 - Starts interactive selection over timestamps and plan items.
 - If cancelled, prints `restore cancelled`.
 - If confirmed, executes the filtered plan and prints the same execution output format as `restore apply --yes` (`restore_item ...`, `restore_summary ...`).
+
+### Mirror open terminal sessions
+
+Emit a live, visually ordered JSON snapshot of Niri windows with terminal/zellij metadata:
+
+```bash
+redeem mirror snapshot
+```
+
+Write it to a file:
+
+```bash
+redeem mirror snapshot --output /tmp/lattice-windows.json
+```
+
+This is intended for another machine to consume over SSH and open local terminals that run `ssh <host> zellij watch <session>` or `zellij attach <session>`.
 
 ### Retention prune
 

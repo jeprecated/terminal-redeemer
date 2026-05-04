@@ -56,6 +56,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "capture run", args: []string{"capture", "run", "--help"}},
 		{name: "history list", args: []string{"history", "list", "--help"}},
 		{name: "history inspect", args: []string{"history", "inspect", "--help"}},
+		{name: "mirror snapshot", args: []string{"mirror", "snapshot", "--help"}},
 		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
 		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
 		{name: "prune run", args: []string{"prune", "run", "--help"}},
@@ -91,6 +92,7 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		{name: "capture once unknown flag", args: []string{"capture", "once", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "capture run unknown flag", args: []string{"capture", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "history list unknown flag", args: []string{"history", "list", "--no-such-flag"}, want: "flag provided but not defined"},
+		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "restore apply missing at", args: []string{"restore", "apply"}, want: "restore apply requires --at"},
 		{name: "restore tui unknown flag", args: []string{"restore", "tui", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
@@ -208,6 +210,43 @@ func TestCaptureOnceEndToEndWithCommandSnapshotter(t *testing.T) {
 	}
 	if len(got) == 0 {
 		t.Fatal("expected capture once to append at least one event")
+	}
+}
+
+func TestMirrorSnapshotEndToEndWithFixture(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fixturePath := filepath.Join(root, "niri.json")
+	err := os.WriteFile(fixturePath, []byte(`{
+		"workspaces": [
+			{"id": "ws-2", "idx": 2},
+			{"id": "ws-1", "idx": 1}
+		],
+		"windows": [
+			{"id": 20, "app_id": "kitty", "title": "second", "workspace_id": "ws-2", "pid": 0, "layout": {"pos_in_scrolling_layout": [1, 1]}},
+			{"id": 10, "app_id": "kitty", "title": "first", "workspace_id": "ws-1", "pid": 0, "layout": {"pos_in_scrolling_layout": [1, 1]}}
+		]
+	}`), 0o600)
+	if err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"mirror", "snapshot", "--fixture", fixturePath, "--host", "lattice", "--profile", "default"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("expected code 0, got %d stderr=%q", code, stderr.String())
+	}
+
+	got := out.String()
+	if !strings.Contains(got, `"host": "lattice"`) {
+		t.Fatalf("expected host in mirror output, got %q", got)
+	}
+	firstIndex := strings.Index(got, `"title": "first"`)
+	secondIndex := strings.Index(got, `"title": "second"`)
+	if firstIndex < 0 || secondIndex < 0 || firstIndex > secondIndex {
+		t.Fatalf("expected ordered mirror output first before second, got %q", got)
 	}
 }
 
