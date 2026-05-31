@@ -212,7 +212,7 @@ func (p *Planner) planTerminal(window model.Window) Item {
 	}
 	if p.config.Terminal.ZellijAttachOrCreate && sessionTag != "" {
 		zellijScript := fmt.Sprintf("env -u ZELLIJ -u ZELLIJ_SESSION_NAME -u ZELLIJ_PANE_ID -u ZELLIJ_TAB_INDEX -u ZELLIJ_TAB_NAME zellij attach --create %q || { echo \"terminal-redeemer: zellij attach failed for session %s\"; exec ${SHELL:-sh} -l; }", sessionTag, sessionTag)
-		command = fmt.Sprintf("%s -e sh -lc %q", strings.TrimSpace(p.config.Terminal.Command), zellijScript)
+		command = fmt.Sprintf("%s -e sh -lc %q", command, zellijScript)
 	}
 
 	if cwd == "" {

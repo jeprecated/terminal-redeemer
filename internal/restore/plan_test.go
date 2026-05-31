@@ -198,6 +198,9 @@ func TestTerminalZellijCommandUsesAttachCreateAndFallbackShell(t *testing.T) {
 		t.Fatalf("expected 1 item, got %d", len(plan.Items))
 	}
 	command := plan.Items[0].Command
+	if !strings.Contains(command, `--directory "/tmp/project"`) {
+		t.Fatalf("expected terminal cwd in command, got %q", command)
+	}
 	if !strings.Contains(command, "zellij attach --create") {
 		t.Fatalf("expected attach --create in command, got %q", command)
 	}
