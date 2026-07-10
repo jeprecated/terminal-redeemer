@@ -20,6 +20,7 @@ type Config struct {
 	ProcessMetadata ProcessMetadataConfig `yaml:"processMetadata"`
 	Retention       RetentionConfig       `yaml:"retention"`
 	Restore         RestoreConfig         `yaml:"restore"`
+	Mirror          MirrorConfig          `yaml:"mirror"`
 }
 
 type CaptureConfig struct {
@@ -39,16 +40,40 @@ type RetentionConfig struct {
 }
 
 type RestoreConfig struct {
-	AppAllowlist             map[string]string `yaml:"appAllowlist"`
-	AppMode                  map[string]string `yaml:"appMode"`
-	ReconcileWorkspaceMoves  bool              `yaml:"reconcileWorkspaceMoves"`
-	WorkspaceReconcileDelay  time.Duration     `yaml:"workspaceReconcileDelay"`
-	Terminal                 TerminalConfig    `yaml:"terminal"`
+	AppAllowlist            map[string]string `yaml:"appAllowlist"`
+	AppMode                 map[string]string `yaml:"appMode"`
+	ReconcileWorkspaceMoves bool              `yaml:"reconcileWorkspaceMoves"`
+	WorkspaceReconcileDelay time.Duration     `yaml:"workspaceReconcileDelay"`
+	Terminal                TerminalConfig    `yaml:"terminal"`
 }
 
 type TerminalConfig struct {
 	Command              string `yaml:"command"`
 	ZellijAttachOrCreate bool   `yaml:"zellijAttachOrCreate"`
+}
+
+type MirrorConfig struct {
+	SourceHost      string                `yaml:"sourceHost"`
+	SSHCommand      string                `yaml:"sshCommand"`
+	SSHOptions      []string              `yaml:"sshOptions"`
+	SnapshotCommand []string              `yaml:"snapshotCommand"`
+	LauncherCommand string                `yaml:"launcherCommand"`
+	SelfCommand     string                `yaml:"selfCommand"`
+	AppID           string                `yaml:"appID"`
+	DefaultMode     string                `yaml:"defaultMode"`
+	OpenDelay       time.Duration         `yaml:"openDelay"`
+	NiriCommand     string                `yaml:"niriCommand"`
+	Clipboard       MirrorClipboardConfig `yaml:"clipboard"`
+}
+
+type MirrorClipboardConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	Command      string   `yaml:"command"`
+	SCPCommand   string   `yaml:"scpCommand"`
+	SCPOptions   []string `yaml:"scpOptions"`
+	KittyCommand string   `yaml:"kittyCommand"`
+	TempDir      string   `yaml:"tempDir"`
+	MIMETypes    []string `yaml:"mimeTypes"`
 }
 
 func DefaultStateDir() string {
@@ -99,6 +124,26 @@ func Defaults() Config {
 				ZellijAttachOrCreate: true,
 			},
 		},
+		Mirror: MirrorConfig{
+			SSHCommand:      "ssh",
+			SSHOptions:      []string{},
+			SnapshotCommand: []string{"redeem", "mirror", "snapshot"},
+			LauncherCommand: "kitty",
+			SelfCommand:     "redeem",
+			AppID:           "terminal-redeemer-mirror",
+			DefaultMode:     "attach",
+			OpenDelay:       150 * time.Millisecond,
+			NiriCommand:     "niri",
+			Clipboard: MirrorClipboardConfig{
+				Enabled:      true,
+				Command:      "wl-paste",
+				SCPCommand:   "scp",
+				SCPOptions:   []string{},
+				KittyCommand: "kitty",
+				TempDir:      "/tmp",
+				MIMETypes:    []string{"image/png", "image/jpeg", "image/webp", "image/gif"},
+			},
+		},
 	}
 }
 
@@ -137,6 +182,51 @@ func Load(path string, explicitPath bool) (Config, error) {
 	if cfg.ProcessMetadata.WhitelistExtra == nil {
 		cfg.ProcessMetadata.WhitelistExtra = []string{}
 	}
+	if cfg.Mirror.SSHOptions == nil {
+		cfg.Mirror.SSHOptions = []string{}
+	}
+	if cfg.Mirror.SnapshotCommand == nil {
+		cfg.Mirror.SnapshotCommand = []string{}
+	}
+	if cfg.Mirror.Clipboard.SCPOptions == nil {
+		cfg.Mirror.Clipboard.SCPOptions = []string{}
+	}
+	if cfg.Mirror.Clipboard.MIMETypes == nil {
+		cfg.Mirror.Clipboard.MIMETypes = []string{}
+	}
+	if err := Validate(cfg); err != nil {
+		return Config{}, fmt.Errorf("invalid config: %w", err)
+	}
 
 	return cfg, nil
+}
+
+func Validate(cfg Config) error {
+	if cfg.Mirror.DefaultMode != "attach" && cfg.Mirror.DefaultMode != "watch" {
+		return fmt.Errorf("mirror.defaultMode must be attach or watch")
+	}
+	if strings.TrimSpace(cfg.Mirror.SSHCommand) == "" {
+		return fmt.Errorf("mirror.sshCommand must not be empty")
+	}
+	if len(cfg.Mirror.SnapshotCommand) == 0 || strings.TrimSpace(cfg.Mirror.SnapshotCommand[0]) == "" {
+		return fmt.Errorf("mirror.snapshotCommand must not be empty")
+	}
+	if strings.TrimSpace(cfg.Mirror.LauncherCommand) == "" || strings.TrimSpace(cfg.Mirror.AppID) == "" {
+		return fmt.Errorf("mirror.launcherCommand and mirror.appID must not be empty")
+	}
+	if strings.TrimSpace(cfg.Mirror.NiriCommand) == "" {
+		return fmt.Errorf("mirror.niriCommand must not be empty")
+	}
+	if cfg.Mirror.OpenDelay < 0 {
+		return fmt.Errorf("mirror.openDelay must not be negative")
+	}
+	if cfg.Mirror.Clipboard.Enabled {
+		if strings.TrimSpace(cfg.Mirror.Clipboard.Command) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.SCPCommand) == "" || strings.TrimSpace(cfg.Mirror.Clipboard.KittyCommand) == "" {
+			return fmt.Errorf("enabled mirror.clipboard commands must not be empty")
+		}
+		if !filepath.IsAbs(cfg.Mirror.Clipboard.TempDir) {
+			return fmt.Errorf("mirror.clipboard.tempDir must be absolute")
+		}
+	}
+	return nil
 }

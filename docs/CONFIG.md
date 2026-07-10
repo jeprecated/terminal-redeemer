@@ -1,90 +1,22 @@
 # Configuration
 
-`redeem` reads defaults, then optional YAML config, then command flags.
+## Precedence
 
-## Sources and precedence
+`redeem` resolves values in this order; later sources win:
 
-Applied in this order (later wins):
+1. built-in defaults
+2. YAML (`${XDG_CONFIG_HOME:-~/.config}/terminal-redeemer/config.yaml`)
+3. per-command CLI flags
 
-1. Built-in defaults.
-2. YAML config file.
-   - Default lookup path: `${XDG_CONFIG_HOME}/terminal-redeemer/config.yaml`
-   - Fallback when `XDG_CONFIG_HOME` is unset: `~/.config/terminal-redeemer/config.yaml`
-3. Per-command CLI flags.
+`--config PATH` chooses a file explicitly. A missing/invalid explicit file is an error, except that `doctor` continues so `config_load` can report it. Repeatable mirror flags (`--ssh-option`, `--snapshot-arg`, `--scp-option`, `--mime-type`) replace their configured list on the first occurrence and append subsequent occurrences.
 
-Global config flag:
+There are no host-specific defaults. `mirror.sourceHost` defaults to empty, so remote operations require configuration or `--host`.
 
-- `--config <path>` selects an explicit config file.
-- For most commands, an explicit missing/invalid config is a startup error.
-- `doctor` is special: it still runs and reports config failure in `config_load`.
-
-## Keys used by current CLI
-
-Core:
-
-- `stateDir`
-- `host`
-- `profile`
-
-Capture and mirror:
-
-- `capture.interval`
-- `capture.snapshotEvery`
-- `capture.niriCommand` (also used by `mirror snapshot` unless `--niri-cmd` is passed)
-
-Process metadata:
-
-- `processMetadata.whitelist`
-- `processMetadata.whitelistExtra`
-- `processMetadata.includeSessionTag`
-
-Retention:
-
-- `retention.days`
-
-Restore:
-
-- `restore.appAllowlist`
-- `restore.appMode`
-- `restore.reconcileWorkspaceMoves`
-- `restore.workspaceReconcileDelay`
-- `restore.terminal.command`
-- `restore.terminal.zellijAttachOrCreate`
-
-Note: `capture.enabled` is not consumed by the CLI binary; scheduling enablement is handled by service/module wiring.
-
-## Defaults
-
-- `stateDir`: `~/.terminal-redeemer`
-- `host`: `local`
-- `profile`: `default`
-- `capture.interval`: `60s`
-- `capture.snapshotEvery`: `100`
-- `capture.niriCommand`: `niri msg -j windows`
-- `retention.days`: `30`
-- `restore.terminal.command`: `kitty`
-- `restore.terminal.zellijAttachOrCreate`: `true`
-- `restore.appAllowlist`: empty map
-- `restore.appMode`: empty map (default `per_window`; optional `oneshot` per app)
-- `restore.reconcileWorkspaceMoves`: `true`
-- `restore.workspaceReconcileDelay`: `1200ms`
-
-## Env vars currently used by capture/doctor
-
-- `REDEEM_NIRI_FIXTURE`
-  - Default value for `capture once/run --fixture`.
-  - If set and `--fixture` is not provided, capture uses file snapshot mode.
-- `REDEEM_NIRI_CMD`
-  - Used as fallback default for `capture once/run --niri-cmd` and doctor niri source checks.
-  - Applied when `capture.niriCommand` is still at the built-in default.
-
-CLI flags always override environment-derived defaults.
-
-## Minimal YAML example
+## YAML schema
 
 ```yaml
 stateDir: /home/user/.terminal-redeemer
-host: workstation-a
+host: local                    # capture/history partition identity
 profile: default
 
 capture:
@@ -101,13 +33,75 @@ retention:
   days: 30
 
 restore:
-  appAllowlist:
-    firefox: firefox --new-window
-  appMode:
-    firefox: oneshot
+  appAllowlist: {}
+  appMode: {}                  # per_window or oneshot
   reconcileWorkspaceMoves: true
   workspaceReconcileDelay: 1200ms
   terminal:
     command: kitty
     zellijAttachOrCreate: true
+
+mirror:
+  sourceHost: ""
+  sshCommand: ssh
+  sshOptions: []
+  snapshotCommand: [redeem, mirror, snapshot]
+  launcherCommand: kitty
+  selfCommand: redeem
+  appID: terminal-redeemer-mirror
+  defaultMode: attach          # attach or watch
+  openDelay: 150ms
+  niriCommand: niri
+  clipboard:
+    enabled: true
+    command: wl-paste
+    scpCommand: scp
+    scpOptions: []
+    kittyCommand: kitty
+    tempDir: /tmp              # absolute; same path is used remotely
+    mimeTypes: [image/png, image/jpeg, image/webp, image/gif]
 ```
+
+`host` and `mirror.sourceHost` are deliberately different: `host` labels locally captured history and source-side snapshot JSON, while `mirror.sourceHost` is the SSH destination used by a consuming machine.
+
+## Mirror flag mapping
+
+Common remote snapshot flags on `list` and `open`:
+
+- `--host`
+- `--ssh-command`
+- repeatable `--ssh-option`
+- repeatable `--snapshot-arg` (the complete remote argv list)
+- `--snapshot-file` (test/offline input; bypasses SSH)
+
+Launch overrides on `open`:
+
+- `--mode`, `--launcher-command`, `--self-command`, `--app-id`, `--open-delay`
+- `--no-clipboard`
+
+Owned-window overrides on `status`/`close`:
+
+- `--host` or `--all-hosts`
+- `--app-id`, `--niri-command`
+
+Clipboard overrides on `paste-image`:
+
+- `--host`, `--ssh-command`, repeatable `--ssh-option`
+- `--scp-command`, repeatable `--scp-option`
+- `--clipboard-command`, `--kitty-command`, `--kitty-to`, `--temp-dir`
+- repeatable `--mime-type`
+
+The Kitty mapping supplies `--host` and `--kitty-to` automatically. `KITTY_LISTEN_ON` is the manual invocation fallback for `--kitty-to`.
+
+## Validation
+
+Config loading rejects invalid mirror modes, empty required commands/app ID, negative launch delay, and a non-absolute clipboard temp directory. Runtime validation rejects empty/unsafe SSH destinations, malformed remote snapshots, absent sessions, unsupported mode combinations, and unavailable executables with contextual errors.
+
+## Home Manager / NixOS
+
+All mirror keys above are typed under `programs.terminal-redeemer.mirror`. The NixOS wrapper forwards per-user settings to the Home Manager module. `extraConfig` remains available for additional raw YAML, but typed options should be preferred.
+
+Capture-only environment compatibility remains:
+
+- `REDEEM_NIRI_FIXTURE`
+- `REDEEM_NIRI_CMD`

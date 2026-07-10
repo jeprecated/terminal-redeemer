@@ -1,0 +1,208 @@
+package mirror
+
+import (
+	"context"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+type recordingRunner struct {
+	outputs     []outputResult
+	outputCalls []Command
+	runCalls    []Command
+	runErr      error
+	onRun       func(Command)
+}
+
+type outputResult struct {
+	data []byte
+	err  error
+}
+
+func (runner *recordingRunner) Output(_ context.Context, command Command) ([]byte, error) {
+	runner.outputCalls = append(runner.outputCalls, command)
+	if len(runner.outputs) == 0 {
+		return nil, errors.New("unexpected output call")
+	}
+	result := runner.outputs[0]
+	runner.outputs = runner.outputs[1:]
+	return result.data, result.err
+}
+
+func (runner *recordingRunner) Run(_ context.Context, command Command) error {
+	runner.runCalls = append(runner.runCalls, command)
+	if runner.onRun != nil {
+		runner.onRun(command)
+	}
+	return runner.runErr
+}
+
+func validRemoteSnapshot() []byte {
+	return []byte(`{"host":"source-node","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":2,"source_window_id":9,"app_id":"kitty","title":"work","zellij_session":"session-a","terminal":{"cwd":"/tmp/work","zellij_session":"session-a"}}]}`)
+}
+
+func TestAcquireRemoteUsesArgvAndDecodesJSON(t *testing.T) {
+	runner := &recordingRunner{outputs: []outputResult{{data: validRemoteSnapshot()}}}
+	snapshot, err := AcquireRemote(context.Background(), runner, RemoteConfig{
+		Host: "user@source-node", SSHCommand: "custom-ssh", SSHOptions: []string{"-p", "2222"},
+		SnapshotCommand: []string{"redeem tool", "mirror", "snapshot", "a'b"},
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if snapshot.Host != "source-node" {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+	call := runner.outputCalls[0]
+	if call.Name != "custom-ssh" || strings.Join(call.Args[:4], "|") != "-p|2222|--|user@source-node" {
+		t.Fatalf("unexpected SSH argv: %#v", call)
+	}
+	if got := call.Args[4]; got != `'redeem tool' 'mirror' 'snapshot' 'a'"'"'b'` {
+		t.Fatalf("remote command was not explicitly quoted: %q", got)
+	}
+}
+
+func TestDecodeSnapshotRejectsMalformedRemoteOutput(t *testing.T) {
+	for _, payload := range [][]byte{[]byte(`not-json`), []byte(`{}`), []byte(`{"host":"x","generated_at":"2026-01-01T00:00:00Z","windows":[{"app_id":"kitty"}]}`)} {
+		if _, err := DecodeSnapshot(payload); err == nil {
+			t.Fatalf("expected malformed payload error for %s", payload)
+		}
+	}
+}
+
+func TestDiscoverFiltersAndOrdersKittyZellijWindows(t *testing.T) {
+	snapshot := Snapshot{Windows: []Window{
+		{Order: 3, SourceWindowID: 3, AppID: "kitty", ZellijSession: "later"},
+		{Order: 1, SourceWindowID: 1, AppID: "firefox", ZellijSession: "skip-app"},
+		{Order: 2, SourceWindowID: 2, AppID: "Kitty", Terminal: &Terminal{ZellijSession: "first"}},
+		{Order: 0, SourceWindowID: 4, AppID: "kitty"},
+	}}
+	got := Discover(snapshot)
+	if len(got) != 2 || SessionName(got[0]) != "first" || SessionName(got[1]) != "later" {
+		t.Fatalf("unexpected discovery: %#v", got)
+	}
+}
+
+func TestPlanLaunchAttachWatchMetadataAndQuoting(t *testing.T) {
+	window := Window{Order: 4, SourceWindowID: 9, Title: "Project\nTitle", ZellijSession: "bad'; echo owned", Terminal: &Terminal{CWD: "/tmp/a'b"}}
+	for _, mode := range []string{"attach", "watch"} {
+		plan, err := PlanLaunch(window, LaunchConfig{
+			SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"},
+			LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Mode: mode,
+			Socket: "unix:/tmp/redeem.sock", Clipboard: true,
+		})
+		if err != nil {
+			t.Fatalf("plan %s: %v", mode, err)
+		}
+		if plan.Title != "source[4]: Project Title" || plan.RemoteCWD != "/tmp/a'b" {
+			t.Fatalf("metadata lost: %#v", plan)
+		}
+		rendered := strings.Join(plan.Command.Args, " ")
+		if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'"+mode+"'") {
+			t.Fatalf("missing mode/env scrub: %s", rendered)
+		}
+		if !strings.Contains(rendered, `'bad'"'"'; echo owned'`) || !strings.Contains(rendered, `cd -- '/tmp/a'"'"'b'`) {
+			t.Fatalf("untrusted metadata was not quoted: %s", rendered)
+		}
+		if plan.Command.Args[len(plan.Command.Args)-3] != "--" || plan.Command.Args[len(plan.Command.Args)-2] != "source" {
+			t.Fatalf("SSH host boundary missing: %#v", plan.Command.Args)
+		}
+	}
+}
+
+func TestOwnedWindowFilteringAndCloseDryRun(t *testing.T) {
+	raw := []byte(`[
+		{"id":1,"app_id":"redeem-mirror","title":"source[0]: one","workspace_id":2},
+		{"id":2,"app_id":"redeem-mirror","title":"other[0]: two"},
+		{"id":3,"app_id":"kitty","title":"source[1]: unrelated"}
+	]`)
+	windows, err := DecodeOwnedWindows(raw, "redeem-mirror", "source")
+	if err != nil || len(windows) != 1 || windows[0].ID != 1 {
+		t.Fatalf("owned filter: %#v err=%v", windows, err)
+	}
+	runner := &recordingRunner{}
+	manager := WindowManager{Runner: runner, NiriCommand: "niri"}
+	if err := manager.Close(context.Background(), windows, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.runCalls) != 0 {
+		t.Fatal("dry-run executed Niri action")
+	}
+	if err := manager.Close(context.Background(), windows, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(runner.runCalls[0].Args, " "); got != "msg action close-window --id 1" {
+		t.Fatalf("close argv: %s", got)
+	}
+}
+
+func TestPasteImageCopiesUniquePathAndInjectsIt(t *testing.T) {
+	tempDir := t.TempDir()
+	runner := &recordingRunner{outputs: []outputResult{
+		{data: []byte("text/plain\nimage/png\n")},
+		{data: []byte{0x89, 'P', 'N', 'G'}},
+	}}
+	runner.onRun = func(command Command) {
+		if command.Name == "scp" {
+			path := command.Args[len(command.Args)-2]
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("image missing during scp: %v", err)
+			}
+		}
+	}
+	result, err := (PasteBridge{Runner: runner, ID: func() (string, error) { return "unique", nil }}).Paste(context.Background(), PasteConfig{
+		SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-p", "22"}, SCPCommand: "scp",
+		ClipboardCommand: "wl-paste", KittyCommand: "kitty", KittyTo: "unix:/tmp/k.sock", TempDir: tempDir,
+		MIMETypes: []string{"image/png", "image/jpeg"},
+	})
+	if err != nil {
+		t.Fatalf("paste: %v", err)
+	}
+	wantPath := tempDir + "/redeem-clipboard-unique.png"
+	if !result.Image || result.RemotePath != wantPath || len(runner.runCalls) != 3 {
+		t.Fatalf("unexpected result/calls: %#v %#v", result, runner.runCalls)
+	}
+	if runner.runCalls[0].Name != "ssh" || !strings.Contains(runner.runCalls[0].Args[len(runner.runCalls[0].Args)-1], ShellQuote(tempDir)) {
+		t.Fatalf("mkdir command: %#v", runner.runCalls[0])
+	}
+	if runner.runCalls[1].Name != "scp" || runner.runCalls[1].Args[len(runner.runCalls[1].Args)-1] != "source:"+wantPath {
+		t.Fatalf("scp argv: %#v", runner.runCalls[1])
+	}
+	if got := string(runner.runCalls[2].Stdin); got != wantPath {
+		t.Fatalf("injected %q", got)
+	}
+	if _, err := os.Stat(wantPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("local image not cleaned up: %v", err)
+	}
+}
+
+func TestPasteNonImageForwardsControlV(t *testing.T) {
+	runner := &recordingRunner{outputs: []outputResult{{data: []byte("text/plain\n")}}}
+	result, err := (PasteBridge{Runner: runner}).Paste(context.Background(), PasteConfig{
+		SourceHost: "source", SSHCommand: "ssh", SCPCommand: "scp", ClipboardCommand: "wl-paste",
+		KittyCommand: "kitty", KittyTo: "unix:/tmp/k.sock", TempDir: "/tmp", MIMETypes: []string{"image/png"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.FellBack || len(runner.runCalls) != 1 || string(runner.runCalls[0].Stdin) != string([]byte{0x16}) {
+		t.Fatalf("fallback: %#v %#v", result, runner.runCalls)
+	}
+}
+
+func TestFilterSessionsReportsMissingDeterministically(t *testing.T) {
+	_, err := FilterSessions([]Window{{ZellijSession: "a"}}, []string{"z", "b"})
+	if err == nil || !strings.Contains(err.Error(), "b, z") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecodeSnapshotValidTimestamp(t *testing.T) {
+	snapshot, err := DecodeSnapshot(validRemoteSnapshot())
+	if err != nil || !snapshot.GeneratedAt.Equal(time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("decode: %#v %v", snapshot, err)
+	}
+}

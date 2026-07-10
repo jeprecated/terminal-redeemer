@@ -57,6 +57,11 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "history list", args: []string{"history", "list", "--help"}},
 		{name: "history inspect", args: []string{"history", "inspect", "--help"}},
 		{name: "mirror snapshot", args: []string{"mirror", "snapshot", "--help"}},
+		{name: "mirror list", args: []string{"mirror", "list", "--help"}},
+		{name: "mirror open", args: []string{"mirror", "open", "--help"}},
+		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
+		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
+		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
 		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
 		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
 		{name: "prune run", args: []string{"prune", "run", "--help"}},
@@ -758,6 +763,61 @@ func TestDoctorPassExitCode(t *testing.T) {
 	}
 	if stderrWithoutWarning(stderr.String()) != "" {
 		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", stderr.String())
+	}
+}
+
+func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
+	root := t.TempDir()
+	snapshotPath := filepath.Join(root, "snapshot.json")
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"work","zellij_session":"session-a","terminal":{"cwd":"/tmp/project","zellij_session":"session-a"}}]}`
+	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--host", "source", "--all", "--dry-run", "--no-clipboard", "--mode", "watch"}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	for _, part := range []string{"'kitty'", "'source[0]: work'", "'ssh'", "'watch'", "'session-a'", "'/tmp/project'"} {
+		if !strings.Contains(out.String(), part) {
+			t.Fatalf("dry-run missing %q: %s", part, out.String())
+		}
+	}
+}
+
+func TestMirrorCLIParseAndMalformedSnapshotErrors(t *testing.T) {
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run([]string{"mirror", "open", "--mode", "edit"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "invalid mirror mode") {
+		t.Fatalf("invalid mode code=%d stderr=%q", code, stderr.String())
+	}
+
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte(`{"windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"mirror", "list", "--snapshot-file", path}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "malformed remote mirror snapshot") {
+		t.Fatalf("malformed code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestMirrorCloseDryRunUsesOwnedWindowFilter(t *testing.T) {
+	root := t.TempDir()
+	niri := filepath.Join(root, "fake-niri")
+	script := `#!/bin/sh
+printf '%s' '[{"id":11,"app_id":"owned","title":"source[0]: one","workspace_id":2},{"id":12,"app_id":"kitty","title":"other"}]'
+`
+	if err := os.WriteFile(niri, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"mirror", "close", "--host", "source", "--app-id", "owned", "--niri-command", niri, "--dry-run"}, &out, &stderr)
+	if code != 0 || !strings.Contains(out.String(), "would close id=11") || strings.Contains(out.String(), "id=12") {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out.String(), stderr.String())
 	}
 }
 

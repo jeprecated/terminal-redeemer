@@ -80,6 +80,25 @@ restore:
   terminal:
     command: foot
     zellijAttachOrCreate: false
+mirror:
+  sourceHost: source-a
+  sshCommand: custom-ssh
+  sshOptions: ["-p", "2222"]
+  snapshotCommand: [remote-redeem, mirror, snapshot]
+  launcherCommand: custom-kitty
+  selfCommand: /bin/redeem
+  appID: redeem-owned
+  defaultMode: watch
+  openDelay: 25ms
+  niriCommand: custom-niri
+  clipboard:
+    enabled: true
+    command: custom-paste
+    scpCommand: custom-scp
+    scpOptions: ["-P", "2222"]
+    kittyCommand: custom-kitty
+    tempDir: /var/tmp
+    mimeTypes: [image/webp]
 `), 0o600)
 	if err != nil {
 		t.Fatalf("write config file: %v", err)
@@ -134,5 +153,21 @@ restore:
 	}
 	if cfg.Restore.WorkspaceReconcileDelay != 3*time.Second {
 		t.Fatalf("expected workspaceReconcileDelay 3s, got %s", cfg.Restore.WorkspaceReconcileDelay)
+	}
+	if cfg.Mirror.SourceHost != "source-a" || cfg.Mirror.SSHCommand != "custom-ssh" || cfg.Mirror.DefaultMode != "watch" {
+		t.Fatalf("unexpected mirror config: %#v", cfg.Mirror)
+	}
+	if cfg.Mirror.OpenDelay != 25*time.Millisecond || cfg.Mirror.Clipboard.TempDir != "/var/tmp" || cfg.Mirror.Clipboard.MIMETypes[0] != "image/webp" {
+		t.Fatalf("unexpected mirror timing/clipboard config: %#v", cfg.Mirror)
+	}
+}
+
+func TestLoadRejectsInvalidMirrorConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("mirror:\n  defaultMode: edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, true); err == nil {
+		t.Fatal("expected invalid mirror mode error")
 	}
 }

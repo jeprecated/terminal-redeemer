@@ -1,118 +1,81 @@
 # terminal-redeemer
 
-`terminal-redeemer` provides a rewindable timeline for terminal and window session restore on Niri.
+`terminal-redeemer` owns terminal/window-session capture, history, restore, and live cross-host mirroring for Niri, Kitty, and Zellij. The CLI is `redeem`.
 
-CLI command: `redeem`
+## Product model
 
-## Status
+- **Restore dead sessions:** capture Niri state, inspect historical state, and recreate local applications and Zellij terminals. Existing capture/history/restore/prune behavior is unchanged; restore preserves the captured terminal CWD.
+- **Mirror live sessions:** obtain another host's `redeem mirror snapshot` over SSH, discover its live Kitty/Zellij windows, and open local Kitty windows attached to or watching those remote sessions.
 
-Current CLI behavior is implemented and covered by tests:
+Mirroring is an explicit CLI action, not a continuous synchronization daemon. Host names are configuration values; no host identity is built in.
 
-- capture (`once`, `run`)
-- history (`list`, `inspect`)
-- restore (`apply`, `tui`)
-- mirror metadata export (`mirror snapshot`)
-- prune (`run`)
-- doctor (`doctor`)
-- Home Manager module scaffolding and eval checks
-
-## Quick Start
-
-### Try CLI
+## Quick start
 
 ```bash
-redeem --help
-```
-
-### Capture once (fixture)
-
-```bash
-redeem capture once \
-  --fixture ./testdata/niri-snapshot.json
-```
-
-### Capture once (live command)
-
-```bash
-redeem capture once \
-  --niri-cmd 'niri msg -j windows'
-```
-
-### Inspect and restore
-
-```bash
+redeem capture once
 redeem history list
-redeem history inspect --at 10m
 redeem restore tui
 redeem restore apply --at 10m --dry-run
-redeem restore apply --at 10m --yes
 ```
 
-`restore apply` behavior:
+`restore apply` requires `--at`. Without `--yes` it previews; with `--yes` it executes. `restore tui` provides interactive timestamp/item selection.
 
-- Without `--yes`, it prints a preview summary and exits without executing commands:
-  - `restore_plan ready=<n> skipped=<n> degraded=<n>`
-  - `pass --yes to execute`
-- With `--yes`, it executes ready items and prints:
-  - `restore_item ...` lines only for non-ready outcomes (`skipped`, `degraded`, `failed`)
-  - `restore_summary restored=<n> skipped=<n> failed=<n>`
-- `--at` is required.
+## Live mirroring
 
-`restore tui` behavior:
-
-- Starts interactive selection over timestamps and plan items.
-- If cancelled, prints `restore cancelled`.
-- If confirmed, executes the filtered plan and prints the same execution output format as `restore apply --yes` (`restore_item ...`, `restore_summary ...`).
-
-### Mirror open terminal sessions
-
-Emit a live, visually ordered JSON snapshot of Niri windows with terminal/zellij metadata:
+Configure `mirror.sourceHost`, or pass `--host`:
 
 ```bash
+# Source-side JSON contract (backward compatible)
 redeem mirror snapshot
+
+# Consumer-side discovery
+redeem mirror list --host workstation.example
+redeem mirror list --host workstation.example --json
+
+# Interactive chooser (when no selection flag is supplied)
+redeem mirror open --host workstation.example
+
+# Deterministic automation
+redeem mirror open --host workstation.example --session project-a --mode attach
+redeem mirror open --host workstation.example --all --mode watch --dry-run
+redeem mirror open --snapshot-file fixture.json --host source --select 2 --dry-run
+
+# Only Terminal Redeemer-owned windows are listed or closed
+redeem mirror status --host workstation.example
+redeem mirror status --all-hosts --json
+redeem mirror close --host workstation.example --dry-run
+redeem mirror close --host workstation.example
 ```
 
-Write it to a file:
+`open` accepts exactly one selection strategy: `--all`, repeatable `--session`, `--select N`, or its interactive prompt. It preserves source order, host, title, session, and CWD in the launch plan. `--mode` is `attach` or read-only `watch`. The remote command clears nested-Zellij environment variables before attaching.
+
+Mirrored Kitty windows map Ctrl+V to `redeem mirror paste-image`. Supported local image clipboard data is written to a unique temporary path, copied to the same path on the source with SCP, and that path is injected through the window's private Kitty control socket. Non-image or unreadable clipboard data forwards Ctrl+V unchanged. Use `mirror.clipboard.enabled: false` or `open --no-clipboard` to disable this mapping.
+
+## Architecture and constraints
+
+Application logic and process planning live in Go under `internal/mirror`. SSH, Niri, Kitty, SCP, and clipboard calls cross a small argv-based runner interface, allowing tests to use fakes without Wayland or network access. Remote shell fragments are limited to explicitly quoted snapshot/attach and remote-directory commands.
+
+Current live-mirror constraints:
+
+- local compositor: Niri (JSON window listing and close action)
+- local terminal launcher: Kitty-compatible command and remote-control behavior
+- remote multiplexer: Zellij
+- source host: `redeem mirror snapshot` available through SSH
+- no automatic reconciliation, pane-level picker, or always-running daemon yet
+
+See [docs/CONFIG.md](docs/CONFIG.md) for precedence/schema and [docs/OPERATIONS.md](docs/OPERATIONS.md) for dependencies, security, and troubleshooting.
+
+## Other commands
 
 ```bash
-redeem mirror snapshot --output /tmp/lattice-windows.json
-```
-
-This is intended for another machine to consume over SSH and open local terminals that run `ssh <host> zellij watch <session>` or `zellij attach <session>`.
-
-### Retention prune
-
-```bash
-redeem prune run --days 30
-```
-
-`prune run` prints:
-
-- `prune_summary events_pruned=<n> snapshots_pruned=<n>`
-
-### Doctor checks
-
-```bash
+redeem capture once|run
+redeem history list|inspect
+redeem restore apply|tui
+redeem prune run
 redeem doctor
 ```
 
-`doctor` prints one line per check and then a summary:
-
-- `doctor_check name=<check> status=<pass|fail> detail=<text>`
-- `doctor_summary total=<n> passed=<n> failed=<n>`
-
-Current checks:
-
-- `state_dir_writable`
-- `config_load`
-- `niri_source`
-- `kitty_available`
-- `zellij_available`
-- `local_install`
-- `events_integrity`
-- `snapshots_integrity`
-
-## Flake Outputs
+## Flake outputs
 
 - `packages.<system>.terminal-redeemer`
 - `apps.<system>.redeem`

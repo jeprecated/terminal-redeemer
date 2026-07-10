@@ -1,89 +1,105 @@
 # Operations
 
-## Service Setup (Home Manager)
+## Dependencies and platform boundary
 
-- Enable `programs.terminal-redeemer.enable = true`.
-- Keep `capture.enable = true` for timer-managed capture.
-- Verify unit/timer:
-  - `systemctl --user status terminal-redeemer-capture.service`
-  - `systemctl --user status terminal-redeemer-capture.timer`
+History restore and live mirroring are separate paths. Live mirroring currently requires:
 
-## Service Setup (NixOS)
+- `ssh` and source-side `redeem mirror snapshot`
+- local Kitty and Niri for opening/listing/closing mirror windows
+- source-side Zellij
+- `wl-paste`, `scp`, and Kitty remote control when the image bridge is enabled
 
-- Import both modules in your NixOS flake/module list:
-  - `home-manager.nixosModules.home-manager`
-  - `terminal-redeemer.nixosModules.terminal-redeemer`
-- Enable and configure per-user settings under `programs.terminal-redeemer.users.<name>`.
-- The NixOS wrapper forwards each user block to Home Manager and writes:
-  - `~/.config/terminal-redeemer/config.yaml`
-  - user `systemd` capture/prune services and timers.
-- After switching to Nix-managed install, remove any local build:
-  - `devbox run uninstall-local`
-  - The CLI warns at startup if `~/.local/bin/redeem` exists and may shadow the Nix version.
-  - `redeem doctor` includes a `local_install` check for the same condition.
+Commands are configurable. `redeem doctor` always checks the existing capture/restore dependencies; when `mirror.sourceHost` is configured it additionally checks mirror SSH, launcher, Niri, and enabled clipboard/SCP executables. Doctor does not connect to the source.
 
-## Capture Troubleshooting
+A non-Niri compositor cannot provide owned-window status/close. A non-Kitty launcher must implement the Kitty flags/control behavior used by the planner. Failures are reported rather than silently operating on unrelated windows.
 
-- Run manual capture once:
-  - `redeem capture once --state-dir ~/.terminal-redeemer --niri-cmd 'niri msg -j windows'`
-- Check output for `events_written=...`.
-- If command mode fails, run `redeem doctor` and check `niri_source`.
-- If fixture mode is intended, verify `REDEEM_NIRI_FIXTURE` points to readable valid JSON.
-- If both `--fixture` and `--niri-cmd` are empty, capture exits with usage error.
+## Home Manager and NixOS
 
-## Replay and Restore Troubleshooting
+Enable `programs.terminal-redeemer.enable = true`. Home Manager writes `~/.config/terminal-redeemer/config.yaml`, installs the selected package, and optionally manages capture/prune timers. The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`.
 
-- List timeline:
-  - `redeem history list --state-dir ~/.terminal-redeemer`
-- Inspect state at timestamp:
-  - `redeem history inspect --state-dir ~/.terminal-redeemer --at <RFC3339>`
-- Preview restore plan:
-  - `redeem restore apply --state-dir ~/.terminal-redeemer --at <RFC3339>`
-- Interactive restore:
-  - `redeem restore tui --state-dir ~/.terminal-redeemer`
+Use build/evaluation before activation:
 
-Restore output behavior:
+```bash
+nix flake check 'path:.'
+```
 
-- `restore apply` preview (no `--yes`) prints:
-  - `restore_plan ready=<n> skipped=<n> degraded=<n>`
-  - `pass --yes to execute`
-- `restore apply --yes` and confirmed `restore tui` print:
-  - `restore_item ...` for `skipped`, `degraded`, and `failed` items
-  - `restore_summary restored=<n> skipped=<n> failed=<n>`
-- `restore tui` cancellation prints `restore cancelled`.
-- `--at` is required for `history inspect` and `restore apply`.
+## Source setup and smoke checks
 
-## Retention and Pruning
+On the source host:
 
-- Run prune:
-  - `redeem prune run --state-dir ~/.terminal-redeemer --days 30`
-- Successful prune prints `prune_summary events_pruned=<n> snapshots_pruned=<n>`.
-- If prune reports `active writer lock present`, stop capture and retry.
+```bash
+redeem mirror snapshot
+```
 
-Prune retention behavior:
+The command emits one JSON object containing `host`, `profile`, `generated_at`, and ordered `windows`. Terminal windows may contain top-level and nested `zellij_session`, plus `terminal.cwd`. The consumer rejects malformed JSON and incomplete required envelope/window metadata.
 
-- Events older than cutoff are pruned, but one pre-cutoff anchor event is retained for replay continuity.
-- Snapshots keep newest overall and newest snapshot at/before cutoff; older redundant snapshots are removed.
+On the consuming host:
 
-## Doctor
+```bash
+redeem mirror list --host source.example
+redeem mirror open --host source.example --all --dry-run
+```
 
-- Run checks:
-  - `redeem doctor`
-- Output format:
-  - `doctor_check name=<check> status=<pass|fail> detail=<text>`
-  - `doctor_summary total=<n> passed=<n> failed=<n>`
-- Current checks: `state_dir_writable`, `config_load`, `niri_source`, `kitty_available`, `zellij_available`, `local_install`, `events_integrity`, `snapshots_integrity`.
+`--dry-run` on `open` still acquires/validates the snapshot but does not run Kitty. For fully offline checks, add `--snapshot-file PATH`.
 
-## Integrity and Recovery
+## Owned-window lifecycle
 
-- Replay skips malformed lines and continues with valid events.
-- Snapshots are optional optimization; replay works from events alone.
-- Keep regular backups of `events.jsonl` and `snapshots/` for disaster recovery.
+Terminal Redeemer marks mirror Kitty windows with `mirror.appID`. Status and close first decode `niri msg -j windows`, then filter by exact app ID. With `--host`, they additionally require the generated title prefix `<host>[`; `--all-hosts` removes only that host filter, never the app-ID ownership filter.
 
-## Quick Troubleshooting Matrix
+```bash
+redeem mirror status --host source.example
+redeem mirror close --host source.example --dry-run
+redeem mirror close --host source.example
+```
 
-- `config load failed: ...` on most commands: fix YAML or path; run `redeem --config <path> doctor` to see `config_load` detail.
-- `invalid --at`: pass RFC3339/RFC3339Nano timestamp (example: `2026-02-15T10:00:00Z`).
-- `history list` returns nothing: verify `--state-dir`, and ensure at least one successful capture wrote `events.jsonl`.
-- restore mostly skipped: inspect `restore.appAllowlist` and terminal metadata availability via `history inspect`.
-- prune does nothing: verify retention window (`--days`) and event/snapshot timestamps are older than cutoff.
+Always inspect dry-run output before destructive close. Closing a local mirror window does not kill its remote Zellij session.
+
+## Image bridge
+
+Each launched window gets a unique Kitty control socket and Ctrl+V mapping. `paste-image`:
+
+1. reads advertised Wayland MIME types;
+2. chooses the first configured supported image MIME;
+3. reads binary clipboard bytes into a mode-0600 uniquely named local file;
+4. creates the quoted remote directory through SSH and copies with SCP;
+5. injects the identical remote path into that Kitty instance;
+6. removes the local temporary file.
+
+The remote file is intentionally retained for the remote consumer. Arrange separate `/tmp` cleanup according to source policy. If clipboard inspection/data is unavailable or not an image, raw Ctrl+V is forwarded. SSH/SCP failures are errors and do not inject a nonexistent path.
+
+## Security assumptions
+
+- Hosts and snapshot metadata are validated/quoted. Local process execution uses explicit argv rather than `sh -c`.
+- SSH necessarily sends a remote shell command. Snapshot argv, CWD, session name, and remote mkdir path use POSIX single-quote escaping, covered by tests.
+- SSH/SCP option lists and executable paths are operator-controlled configuration. Treat the YAML as trusted: SSH options such as `ProxyCommand` can intentionally execute local programs.
+- The app ID is the ownership boundary for close. Do not assign it to unrelated applications.
+- SSH host keys, authentication, authorization, remote command availability, and remote temp-file confidentiality remain the operator's responsibility.
+- The image bridge copies clipboard data to the configured source host. Disable it for sensitive workflows or untrusted hosts.
+
+## Troubleshooting
+
+- `source host is required`: set `mirror.sourceHost` or pass `--host`.
+- `decode/malformed remote mirror snapshot`: verify the remote `redeem` version and run its snapshot command directly.
+- SSH failure: test normal non-mutating SSH separately; inspect `sshCommand`, `sshOptions`, and `snapshotCommand`.
+- no Kitty/Zellij windows: source snapshot windows need `app_id: kitty` and Zellij session metadata.
+- Niri/Wayland error: run from the graphical user session and verify `NIRI_SOCKET`; status/close do not support other compositors yet.
+- launcher failure: verify Kitty accepts `--detach`, `--class`, `--listen-on`, `--override`, and `-e`.
+- image fallback only: inspect `wl-paste --list-types`, configured MIME preference, Kitty remote-control socket, and SCP command/options.
+- nested key interception: use the default fresh-Kitty launcher; the remote attach/watch command clears Zellij environment variables.
+
+## Existing capture/restore operations
+
+```bash
+redeem capture once
+redeem history list
+redeem history inspect --at <RFC3339>
+redeem restore apply --at <RFC3339> --dry-run
+redeem restore tui
+redeem prune run --days 30
+```
+
+Replay tolerates malformed event lines and snapshots remain an optional optimization. Stop active capture if prune reports an active writer lock.
+
+## Deferred work
+
+This milestone intentionally does not provide continuous reconciliation, an always-running daemon, duplicate-window suppression across repeated `open` calls, or a pane-rich full-screen mirror TUI. The Go discovery/planning interfaces are intended to support those later without moving application logic back into host configuration repositories.

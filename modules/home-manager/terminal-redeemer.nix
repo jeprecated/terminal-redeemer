@@ -29,6 +29,27 @@ let
         zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
       };
     };
+    mirror = {
+      sourceHost = cfg.mirror.sourceHost;
+      sshCommand = cfg.mirror.sshCommand;
+      sshOptions = cfg.mirror.sshOptions;
+      snapshotCommand = cfg.mirror.snapshotCommand;
+      launcherCommand = cfg.mirror.launcherCommand;
+      selfCommand = cfg.mirror.selfCommand;
+      appID = cfg.mirror.appID;
+      defaultMode = cfg.mirror.defaultMode;
+      openDelay = cfg.mirror.openDelay;
+      niriCommand = cfg.mirror.niriCommand;
+      clipboard = {
+        enabled = cfg.mirror.clipboard.enabled;
+        command = cfg.mirror.clipboard.command;
+        scpCommand = cfg.mirror.clipboard.scpCommand;
+        scpOptions = cfg.mirror.clipboard.scpOptions;
+        kittyCommand = cfg.mirror.clipboard.kittyCommand;
+        tempDir = cfg.mirror.clipboard.tempDir;
+        mimeTypes = cfg.mirror.clipboard.mimeTypes;
+      };
+    };
   } // cfg.extraConfig;
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
   configPath = "${config.xdg.configHome}/terminal-redeemer/config.yaml";
@@ -158,6 +179,28 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Use zellij attach-or-create strategy during restore.";
+    };
+
+    mirror = {
+      sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "SSH source host for live session mirroring."; };
+      sshCommand = lib.mkOption { type = lib.types.str; default = "ssh"; description = "SSH executable."; };
+      sshOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SSH argv options."; };
+      snapshotCommand = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "redeem" "mirror" "snapshot" ]; description = "Remote snapshot command argv."; };
+      launcherCommand = lib.mkOption { type = lib.types.str; default = "kitty"; description = "Kitty-compatible local launcher executable."; };
+      selfCommand = lib.mkOption { type = lib.types.str; default = "redeem"; description = "Redeem executable used in Kitty clipboard mappings."; };
+      appID = lib.mkOption { type = lib.types.str; default = "terminal-redeemer-mirror"; description = "App ID/class marking Terminal Redeemer-owned mirror windows."; };
+      defaultMode = lib.mkOption { type = lib.types.enum [ "attach" "watch" ]; default = "attach"; description = "Default Zellij mirror mode."; };
+      openDelay = lib.mkOption { type = lib.types.str; default = "150ms"; description = "Delay between local window launches."; };
+      niriCommand = lib.mkOption { type = lib.types.str; default = "niri"; description = "Niri executable for owned-window operations."; };
+      clipboard = {
+        enabled = lib.mkOption { type = lib.types.bool; default = true; description = "Enable mirrored image-paste bridge mapping."; };
+        command = lib.mkOption { type = lib.types.str; default = "wl-paste"; description = "Wayland clipboard reader executable."; };
+        scpCommand = lib.mkOption { type = lib.types.str; default = "scp"; description = "SCP executable."; };
+        scpOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SCP argv options."; };
+        kittyCommand = lib.mkOption { type = lib.types.str; default = "kitty"; description = "Kitty remote-control executable."; };
+        tempDir = lib.mkOption { type = lib.types.str; default = "/tmp"; description = "Absolute temporary path shared with the source host."; };
+        mimeTypes = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "image/png" "image/jpeg" "image/webp" "image/gif" ]; description = "Preferred supported clipboard image MIME types."; };
+      };
     };
 
     extraConfig = lib.mkOption {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -105,6 +106,19 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 		doctor.EventsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 		doctor.SnapshotsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 	}
+	if strings.TrimSpace(resolvedConfig.Mirror.SourceHost) != "" {
+		checks = append(checks,
+			doctor.CommandAvailableCheck{CheckName: "mirror_ssh_available", Command: resolvedConfig.Mirror.SSHCommand},
+			doctor.CommandAvailableCheck{CheckName: "mirror_launcher_available", Command: resolvedConfig.Mirror.LauncherCommand},
+			doctor.CommandAvailableCheck{CheckName: "mirror_niri_available", Command: resolvedConfig.Mirror.NiriCommand},
+		)
+		if resolvedConfig.Mirror.Clipboard.Enabled {
+			checks = append(checks,
+				doctor.CommandAvailableCheck{CheckName: "mirror_clipboard_available", Command: resolvedConfig.Mirror.Clipboard.Command},
+				doctor.CommandAvailableCheck{CheckName: "mirror_scp_available", Command: resolvedConfig.Mirror.Clipboard.SCPCommand},
+			)
+		}
+	}
 
 	results := doctor.Run(context.Background(), checks)
 	for _, result := range results {
@@ -122,18 +136,33 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 
 func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: redeem mirror <snapshot|list|open|status|close|paste-image> [flags]")
 		return 2
 	}
 	if isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem mirror <snapshot|list|open|status|close|paste-image> [flags]")
 		return 0
 	}
-	if args[0] != "snapshot" {
+	switch args[0] {
+	case "snapshot":
+		return runMirrorSnapshot(args[1:], resolvedConfig, stdout, stderr)
+	case "list":
+		return runMirrorList(args[1:], resolvedConfig, stdout, stderr)
+	case "open":
+		return runMirrorOpen(args[1:], resolvedConfig, stdout, stderr)
+	case "status":
+		return runMirrorStatus(args[1:], resolvedConfig, stdout, stderr)
+	case "close":
+		return runMirrorClose(args[1:], resolvedConfig, stdout, stderr)
+	case "paste-image":
+		return runMirrorPaste(args[1:], resolvedConfig, stdout, stderr)
+	default:
 		_, _ = fmt.Fprintf(stderr, "unknown mirror subcommand: %s\n", args[0])
 		return 2
 	}
+}
 
+func runMirrorSnapshot(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror snapshot", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	host := fs.String("host", resolvedConfig.Host, "host identifier")
@@ -144,7 +173,7 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	processWhitelistExtra := fs.String("process-whitelist-extra", strings.Join(resolvedConfig.ProcessMetadata.WhitelistExtra, ","), "comma-separated extra process tags")
 	includeSessionTag := fs.Bool("include-session-tag", resolvedConfig.ProcessMetadata.IncludeSessionTag, "include terminal session tags")
 	outputPath := fs.String("output", "", "optional output file path")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
@@ -154,30 +183,20 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		_, _ = fmt.Fprintln(stderr, "mirror snapshot requires --fixture or --niri-cmd")
 		return 2
 	}
-
 	snapshot, err := mirror.Capture(context.Background(), mirror.Options{
-		Host:        *host,
-		Profile:     *profile,
-		NiriCommand: *niriCmd,
-		FixturePath: *fixture,
-		ProcessMetadata: procmeta.Config{
-			Whitelist:         splitCSV(*processWhitelist),
-			WhitelistExtra:    splitCSV(*processWhitelistExtra),
-			IncludeSessionTag: *includeSessionTag,
-		},
+		Host: *host, Profile: *profile, NiriCommand: *niriCmd, FixturePath: *fixture,
+		ProcessMetadata: procmeta.Config{Whitelist: splitCSV(*processWhitelist), WhitelistExtra: splitCSV(*processWhitelistExtra), IncludeSessionTag: *includeSessionTag},
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror snapshot failed: %v\n", err)
 		return 1
 	}
-
 	payload, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror snapshot encode failed: %v\n", err)
 		return 1
 	}
 	payload = append(payload, '\n')
-
 	if strings.TrimSpace(*outputPath) != "" {
 		if err := os.WriteFile(*outputPath, payload, 0o600); err != nil {
 			_, _ = fmt.Fprintf(stderr, "mirror snapshot write failed: %v\n", err)
@@ -185,8 +204,331 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		}
 		return 0
 	}
-
 	_, _ = stdout.Write(payload)
+	return 0
+}
+
+type repeatFlag struct {
+	values []string
+	set    bool
+}
+
+func (value *repeatFlag) String() string { return strings.Join(value.values, ",") }
+func (value *repeatFlag) Set(item string) error {
+	if !value.set {
+		value.values = nil
+		value.set = true
+	}
+	value.values = append(value.values, item)
+	return nil
+}
+
+type mirrorSourceFlags struct {
+	host            *string
+	sshCommand      *string
+	snapshotFile    *string
+	sshOptions      repeatFlag
+	snapshotCommand repeatFlag
+}
+
+func addMirrorSourceFlags(fs *flag.FlagSet, cfg config.MirrorConfig) *mirrorSourceFlags {
+	flags := &mirrorSourceFlags{
+		host:            fs.String("host", cfg.SourceHost, "SSH source host"),
+		sshCommand:      fs.String("ssh-command", cfg.SSHCommand, "SSH executable"),
+		snapshotFile:    fs.String("snapshot-file", "", "read snapshot JSON locally instead of SSH"),
+		sshOptions:      repeatFlag{values: append([]string(nil), cfg.SSHOptions...)},
+		snapshotCommand: repeatFlag{values: append([]string(nil), cfg.SnapshotCommand...)},
+	}
+	fs.Var(&flags.sshOptions, "ssh-option", "SSH option (repeatable; first occurrence replaces config)")
+	fs.Var(&flags.snapshotCommand, "snapshot-arg", "remote snapshot argv item (repeatable; first occurrence replaces config)")
+	return flags
+}
+
+func acquireMirrorSnapshot(flags *mirrorSourceFlags) (mirror.Snapshot, string, error) {
+	host := strings.TrimSpace(*flags.host)
+	if strings.TrimSpace(*flags.snapshotFile) != "" {
+		snapshot, err := mirror.ReadSnapshot(*flags.snapshotFile)
+		if host == "" {
+			host = snapshot.Host
+		}
+		return snapshot, host, err
+	}
+	if host == "" {
+		return mirror.Snapshot{}, "", fmt.Errorf("source host is required (--host or mirror.sourceHost)")
+	}
+	snapshot, err := mirror.AcquireRemote(context.Background(), mirror.ExecRunner{}, mirror.RemoteConfig{
+		Host: host, SSHCommand: *flags.sshCommand, SSHOptions: flags.sshOptions.values, SnapshotCommand: flags.snapshotCommand.values,
+	})
+	return snapshot, host, err
+}
+
+func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror list", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	asJSON := fs.Bool("json", false, "emit discovered windows as JSON")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	snapshot, host, err := acquireMirrorSnapshot(source)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror list failed: %v\n", err)
+		return 1
+	}
+	windows := mirror.Discover(snapshot)
+	if *asJSON {
+		payload, _ := json.MarshalIndent(windows, "", "  ")
+		_, _ = fmt.Fprintf(stdout, "%s\n", payload)
+		return 0
+	}
+	for _, window := range windows {
+		cwd := ""
+		if window.Terminal != nil {
+			cwd = window.Terminal.CWD
+		}
+		_, _ = fmt.Fprintf(stdout, "order=%d host=%s session=%q workspace=%q cwd=%q title=%q\n", window.Order, host, mirror.SessionName(window), window.WorkspaceID, cwd, window.Title)
+	}
+	return 0
+}
+
+func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror open", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	source := addMirrorSourceFlags(fs, resolvedConfig.Mirror)
+	mode := fs.String("mode", resolvedConfig.Mirror.DefaultMode, "attach or watch")
+	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
+	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
+	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
+	openDelay := fs.Duration("open-delay", resolvedConfig.Mirror.OpenDelay, "delay between launches")
+	all := fs.Bool("all", false, "open all discovered source windows")
+	selectIndex := fs.Int("select", 0, "open one 1-based result index without prompting")
+	dryRun := fs.Bool("dry-run", false, "print launch commands without executing")
+	noClipboard := fs.Bool("no-clipboard", false, "disable image clipboard bridge mapping")
+	sessions := repeatFlag{}
+	fs.Var(&sessions, "session", "session name to open (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if *mode != "attach" && *mode != "watch" {
+		_, _ = fmt.Fprintf(stderr, "invalid mirror mode %q (expected attach or watch)\n", *mode)
+		return 2
+	}
+	if *openDelay < 0 {
+		_, _ = fmt.Fprintln(stderr, "--open-delay must not be negative")
+		return 2
+	}
+	if *all && (len(sessions.values) > 0 || *selectIndex > 0) {
+		_, _ = fmt.Fprintln(stderr, "--all cannot be combined with --session or --select")
+		return 2
+	}
+	snapshot, host, err := acquireMirrorSnapshot(source)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", err)
+		return 1
+	}
+	windows := mirror.Discover(snapshot)
+	if len(windows) == 0 {
+		_, _ = fmt.Fprintf(stderr, "no Kitty/Zellij windows found on %s\n", host)
+		return 1
+	}
+	selected := windows
+	switch {
+	case *all:
+	case len(sessions.values) > 0:
+		selected, err = mirror.FilterSessions(windows, sessions.values)
+	case *selectIndex > 0:
+		if *selectIndex > len(windows) {
+			err = fmt.Errorf("--select %d exceeds %d results", *selectIndex, len(windows))
+		} else {
+			selected = windows[*selectIndex-1 : *selectIndex]
+		}
+	default:
+		for i, window := range windows {
+			_, _ = fmt.Fprintf(stdout, "%d\t%s\t%s\n", i+1, mirror.SessionName(window), window.Title)
+		}
+		_, _ = fmt.Fprint(stdout, "select session> ")
+		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if readErr != nil {
+			err = fmt.Errorf("interactive selection failed: %w", readErr)
+		} else {
+			choice, parseErr := strconv.Atoi(strings.TrimSpace(line))
+			if parseErr != nil || choice < 1 || choice > len(windows) {
+				err = fmt.Errorf("invalid selection %q", strings.TrimSpace(line))
+			} else {
+				selected = windows[choice-1 : choice]
+			}
+		}
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", err)
+		return 1
+	}
+	for i, window := range selected {
+		unique, idErr := mirror.RandomID()
+		if idErr != nil {
+			_, _ = fmt.Fprintf(stderr, "mirror open failed: create socket name: %v\n", idErr)
+			return 1
+		}
+		socket := fmt.Sprintf("unix:/tmp/%s-%s.sock", safeSocketPart(*appID), unique)
+		plan, planErr := mirror.PlanLaunch(window, mirror.LaunchConfig{
+			SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
+			LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID, Mode: *mode,
+			Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
+		})
+		if planErr != nil {
+			_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", planErr)
+			return 1
+		}
+		if *dryRun {
+			_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(plan.Command))
+			continue
+		}
+		if runErr := (mirror.ExecRunner{}).Run(context.Background(), plan.Command); runErr != nil {
+			_, _ = fmt.Fprintf(stderr, "mirror open failed for %s: %v\n", plan.Session, runErr)
+			return 1
+		}
+		if i+1 < len(selected) && *openDelay > 0 {
+			time.Sleep(*openDelay)
+		}
+	}
+	return 0
+}
+
+func safeSocketPart(value string) string {
+	var out strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			out.WriteRune(r)
+		}
+	}
+	if out.Len() == 0 {
+		return "redeem-mirror"
+	}
+	return out.String()
+}
+
+func addOwnedWindowFlags(fs *flag.FlagSet, cfg config.MirrorConfig) (*string, *string, *string, *bool) {
+	host := fs.String("host", cfg.SourceHost, "limit to source host")
+	appID := fs.String("app-id", cfg.AppID, "owned Kitty app ID/class")
+	niriCommand := fs.String("niri-command", cfg.NiriCommand, "Niri executable")
+	allHosts := fs.Bool("all-hosts", false, "operate on all owned mirror windows")
+	return host, appID, niriCommand, allHosts
+}
+
+func listOwnedForCLI(fs *flag.FlagSet, host *string, appID *string, niriCommand *string, allHosts *bool, stderr io.Writer) ([]mirror.OwnedWindow, mirror.WindowManager, int) {
+	if *allHosts {
+		*host = ""
+	}
+	if strings.TrimSpace(*host) == "" && !*allHosts {
+		_, _ = fmt.Fprintln(stderr, "--host (or configured mirror.sourceHost) or --all-hosts is required")
+		return nil, mirror.WindowManager{}, 2
+	}
+	manager := mirror.WindowManager{Runner: mirror.ExecRunner{}, NiriCommand: *niriCommand}
+	windows, err := manager.List(context.Background(), *appID, *host)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "%s failed: %v\n", fs.Name(), err)
+		return nil, manager, 1
+	}
+	return windows, manager, 0
+}
+
+func runMirrorStatus(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host, appID, niriCommand, allHosts := addOwnedWindowFlags(fs, resolvedConfig.Mirror)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	windows, _, code := listOwnedForCLI(fs, host, appID, niriCommand, allHosts, stderr)
+	if code != 0 {
+		return code
+	}
+	if *asJSON {
+		payload, _ := json.MarshalIndent(windows, "", "  ")
+		_, _ = fmt.Fprintf(stdout, "%s\n", payload)
+		return 0
+	}
+	for _, window := range windows {
+		_, _ = fmt.Fprintf(stdout, "id=%d workspace=%v title=%q\n", window.ID, window.WorkspaceID, window.Title)
+	}
+	return 0
+}
+
+func runMirrorClose(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror close", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host, appID, niriCommand, allHosts := addOwnedWindowFlags(fs, resolvedConfig.Mirror)
+	dryRun := fs.Bool("dry-run", false, "print owned windows without closing them")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	windows, manager, code := listOwnedForCLI(fs, host, appID, niriCommand, allHosts, stderr)
+	if code != 0 {
+		return code
+	}
+	if *dryRun {
+		for _, window := range windows {
+			_, _ = fmt.Fprintf(stdout, "would close id=%d workspace=%v title=%q\n", window.ID, window.WorkspaceID, window.Title)
+		}
+	}
+	if err := manager.Close(context.Background(), windows, *dryRun); err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror close failed: %v\n", err)
+		return 1
+	}
+	if !*dryRun {
+		_, _ = fmt.Fprintf(stdout, "closed=%d\n", len(windows))
+	}
+	return 0
+}
+
+func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror paste-image", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host := fs.String("host", resolvedConfig.Mirror.SourceHost, "SSH source host")
+	sshCommand := fs.String("ssh-command", resolvedConfig.Mirror.SSHCommand, "SSH executable")
+	scpCommand := fs.String("scp-command", resolvedConfig.Mirror.Clipboard.SCPCommand, "SCP executable")
+	clipboardCommand := fs.String("clipboard-command", resolvedConfig.Mirror.Clipboard.Command, "wl-paste compatible executable")
+	kittyCommand := fs.String("kitty-command", resolvedConfig.Mirror.Clipboard.KittyCommand, "Kitty executable")
+	kittyTo := fs.String("kitty-to", os.Getenv("KITTY_LISTEN_ON"), "Kitty remote-control socket")
+	tempDir := fs.String("temp-dir", resolvedConfig.Mirror.Clipboard.TempDir, "shared absolute image temp directory")
+	sshOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.SSHOptions...)}
+	scpOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.Clipboard.SCPOptions...)}
+	mimeTypes := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.Clipboard.MIMETypes...)}
+	fs.Var(&sshOptions, "ssh-option", "SSH option (repeatable; first occurrence replaces config)")
+	fs.Var(&scpOptions, "scp-option", "SCP option (repeatable; first occurrence replaces config)")
+	fs.Var(&mimeTypes, "mime-type", "preferred image MIME type (repeatable; first occurrence replaces config)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	result, err := (mirror.PasteBridge{Runner: mirror.ExecRunner{}}).Paste(context.Background(), mirror.PasteConfig{
+		SourceHost: *host, SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
+		SCPCommand: *scpCommand, SCPOptions: scpOptions.values,
+		ClipboardCommand: *clipboardCommand, KittyCommand: *kittyCommand, KittyTo: *kittyTo,
+		TempDir: *tempDir, MIMETypes: mimeTypes.values,
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror paste-image failed: %v\n", err)
+		return 1
+	}
+	if result.Image {
+		_, _ = fmt.Fprintf(stdout, "pasted_image mime=%s remote_path=%s\n", result.MIMEType, result.RemotePath)
+	}
 	return 0
 }
 
@@ -1005,7 +1347,7 @@ func printHelp(w io.Writer) {
 	writeln(w, "  capture   Capture window/session state")
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
-	writeln(w, "  mirror    Emit live window/session mirror metadata")
+	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
 	writeln(w, "  prune     Prune old events/snapshots")
 	writeln(w, "  bottle    Bottle workflows (V2)")
 	writeln(w, "  doctor    Basic environment checks")

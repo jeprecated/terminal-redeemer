@@ -19,7 +19,7 @@
           pname = "terminal-redeemer";
           version = "0.1.0";
           src = ./.;
-          vendorHash = null;
+          vendorHash = "sha256-sDiLEcBE6qw6bM0+AlyAN47W1f7wySG8vYcCTrbIQSU=";
           subPackages = [ "cmd/redeem" ];
 
           meta = with pkgs.lib; {
@@ -82,6 +82,27 @@
                     restore.workspaceReconcileDelay = "3s";
                     terminal.command = "foot";
                     terminal.zellijAttachOrCreate = false;
+                    mirror = {
+                      sourceHost = "source.example";
+                      sshCommand = "custom-ssh";
+                      sshOptions = [ "-p" "2222" ];
+                      snapshotCommand = [ "remote-redeem" "mirror" "snapshot" ];
+                      launcherCommand = "custom-kitty";
+                      selfCommand = "/run/current-system/sw/bin/redeem";
+                      appID = "redeem-owned";
+                      defaultMode = "watch";
+                      openDelay = "25ms";
+                      niriCommand = "custom-niri";
+                      clipboard = {
+                        enabled = true;
+                        command = "custom-wl-paste";
+                        scpCommand = "custom-scp";
+                        scpOptions = [ "-P" "2222" ];
+                        kittyCommand = "custom-kitty";
+                        tempDir = "/var/tmp";
+                        mimeTypes = [ "image/webp" ];
+                      };
+                    };
                   };
                 }
               ];
@@ -106,6 +127,14 @@
           assert rendered.restore.appMode.firefox == "oneshot";
           assert rendered.restore.reconcileWorkspaceMoves == false;
           assert rendered.restore.workspaceReconcileDelay == "3s";
+          assert rendered.mirror.sourceHost == "source.example";
+          assert rendered.mirror.sshOptions == [ "-p" "2222" ];
+          assert rendered.mirror.snapshotCommand == [ "remote-redeem" "mirror" "snapshot" ];
+          assert rendered.mirror.appID == "redeem-owned";
+          assert rendered.mirror.defaultMode == "watch";
+          assert rendered.mirror.openDelay == "25ms";
+          assert rendered.mirror.clipboard.scpOptions == [ "-P" "2222" ];
+          assert rendered.mirror.clipboard.mimeTypes == [ "image/webp" ];
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" captureExec != null;
           assert builtins.match ".* capture once" captureExec != null;
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" pruneExec != null;
@@ -156,6 +185,8 @@
                       restore.appMode.firefox = "oneshot";
                       restore.reconcileWorkspaceMoves = false;
                       restore.workspaceReconcileDelay = "3s";
+                      mirror.sourceHost = "source.example";
+                      mirror.defaultMode = "watch";
                     };
                   };
                 }
@@ -167,6 +198,8 @@
           assert rendered.restore.appMode.firefox == "oneshot";
           assert rendered.restore.reconcileWorkspaceMoves == false;
           assert rendered.restore.workspaceReconcileDelay == "3s";
+          assert rendered.mirror.sourceHost == "source.example";
+          assert rendered.mirror.defaultMode == "watch";
           pkgs.runCommand "nixos-module-eval" { } "touch $out";
       })
     // {
