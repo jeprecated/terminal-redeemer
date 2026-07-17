@@ -148,11 +148,12 @@
           assert builtins.elem "graphical-session.target" captureService.Unit.PartOf;
           assert captureTimer.Timer.OnActiveSec == "30s";
           assert captureTimer.Timer.OnUnitActiveSec == "30s";
-          assert captureTimer.Timer.Persistent;
+          assert !(captureTimer.Timer ? Persistent);
           assert builtins.elem "graphical-session.target" captureTimer.Unit.After;
           assert builtins.elem "graphical-session.target" captureTimer.Unit.PartOf;
           assert captureTimer.Install.WantedBy == [ "graphical-session.target" ];
           assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.OnCalendar == "hourly";
+          assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.Persistent;
           hmCfg.activationPackage;
 
         checks.hm-module-prune-default-disabled =
@@ -177,7 +178,7 @@
           assert rendered.capture.interval == "60s";
           assert captureTimer.Timer.OnActiveSec == "60s";
           assert captureTimer.Timer.OnUnitActiveSec == "60s";
-          assert captureTimer.Timer.Persistent;
+          assert !(captureTimer.Timer ? Persistent);
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
           hmCfg.activationPackage;

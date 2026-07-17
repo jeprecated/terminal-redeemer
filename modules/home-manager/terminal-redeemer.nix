@@ -244,7 +244,6 @@ in {
       Timer = {
         OnActiveSec = cfg.capture.interval;
         OnUnitActiveSec = cfg.capture.interval;
-        Persistent = true;
         Unit = "terminal-redeemer-capture.service";
       };
       Install.WantedBy = [ "graphical-session.target" ];
