@@ -8,15 +8,19 @@ import (
 	"strings"
 )
 
+const DefaultSnapshotCommand = "niri msg -j windows"
+
+// CommandRunner executes one program with explicit argv. The distributed Niri
+// query never crosses a shell; only explicitly configured compatibility
+// commands use `sh -c`.
 type CommandRunner interface {
-	Run(ctx context.Context, command string) ([]byte, error)
+	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-type ShellRunner struct{}
+type ExecRunner struct{}
 
-func (ShellRunner) Run(ctx context.Context, command string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
-	return cmd.Output()
+func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 type CommandSnapshotter struct {
@@ -27,29 +31,41 @@ type CommandSnapshotter struct {
 func (s CommandSnapshotter) Snapshot(ctx context.Context) ([]byte, error) {
 	runner := s.Runner
 	if runner == nil {
-		runner = ShellRunner{}
+		runner = ExecRunner{}
 	}
-	out, err := runner.Run(ctx, s.Command)
-	if err != nil {
-		return nil, fmt.Errorf("run niri snapshot command: %w", err)
-	}
-	if !isWindowsCommand(s.Command) {
+	if !isDefaultWindowsCommand(s.Command) {
+		out, err := runner.Run(ctx, "sh", "-c", s.Command)
+		if err != nil {
+			return nil, commandError("run custom Niri snapshot command", out, err)
+		}
 		return out, nil
 	}
 
-	workspaces, err := runner.Run(ctx, "niri msg -j workspaces")
+	windows, err := runner.Run(ctx, "niri", "msg", "-j", "windows")
 	if err != nil {
-		return nil, fmt.Errorf("run niri workspaces command: %w", err)
+		return nil, commandError("run Niri windows query", windows, err)
 	}
-	combined, err := combineSnapshotPayloads(workspaces, out)
+	workspaces, err := runner.Run(ctx, "niri", "msg", "-j", "workspaces")
 	if err != nil {
-		return nil, fmt.Errorf("combine niri snapshot payloads: %w", err)
+		return nil, commandError("run Niri workspaces query", workspaces, err)
+	}
+	combined, err := combineSnapshotPayloads(workspaces, windows)
+	if err != nil {
+		return nil, fmt.Errorf("combine Niri snapshot payloads: %w", err)
 	}
 	return combined, nil
 }
 
-func isWindowsCommand(command string) bool {
-	return strings.TrimSpace(command) == "niri msg -j windows"
+func commandError(operation string, output []byte, err error) error {
+	detail := strings.TrimSpace(string(output))
+	if detail != "" {
+		return fmt.Errorf("%s: %w: %s", operation, err, detail)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func isDefaultWindowsCommand(command string) bool {
+	return strings.TrimSpace(command) == DefaultSnapshotCommand
 }
 
 func combineSnapshotPayloads(workspaces []byte, windows []byte) ([]byte, error) {

@@ -545,6 +545,12 @@ func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Write
 	return 0
 }
 
+type rawSnapshotter []byte
+
+func (s rawSnapshotter) Snapshot(context.Context) ([]byte, error) {
+	return append([]byte(nil), s...), nil
+}
+
 func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -577,6 +583,18 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return 2
 	}
 
+	var snapshotter collector.Snapshotter
+	if strings.TrimSpace(*fixture) != "" {
+		snapshotter = niri.FileSnapshotter{Path: *fixture}
+	} else {
+		snapshotter = niri.CommandSnapshotter{Command: *niriCmd}
+	}
+	readySnapshot, err := resume.WaitForNiri(context.Background(), snapshotter, *timeout, *pollInterval)
+	if err != nil {
+		writef(stderr, "resume Niri readiness failed: %v; verify NIRI_SOCKET, the configured query, and graphical-session readiness\n", err)
+		return 1
+	}
+
 	checkpoints, err := replay.ListCheckpoints(*stateDir)
 	if err != nil {
 		writef(stderr, "resume checkpoint scan failed: %v\n", err)
@@ -595,12 +613,6 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		MaxAge:        *maxAge,
 	})
 
-	var snapshotter collector.Snapshotter
-	if strings.TrimSpace(*fixture) != "" {
-		snapshotter = niri.FileSnapshotter{Path: *fixture}
-	} else {
-		snapshotter = niri.CommandSnapshotter{Command: *niriCmd}
-	}
 	planner := resume.NewPlanner(resume.PlannerConfig{UnresolvedWorkspace: policy})
 	var current model.State
 	var available []string
@@ -610,7 +622,7 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 			WhitelistExtra:    resolvedConfig.ProcessMetadata.WhitelistExtra,
 			IncludeSessionTag: true,
 		})
-		current, err = collector.New(snapshotter, enricher).Collect(context.Background())
+		current, err = collector.New(rawSnapshotter(readySnapshot), enricher).Collect(context.Background())
 		if err != nil {
 			writef(stderr, "resume current Niri state failed: %v\n", err)
 			return 1

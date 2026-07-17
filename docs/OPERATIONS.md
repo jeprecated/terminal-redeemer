@@ -23,7 +23,7 @@ The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.
 
 Startup resume remains off by default. With `restore.onStartup = true`, Home Manager enables `terminal-redeemer-resume.service` as a `graphical-session.target` user oneshot. Its `ExecStart` is the same packaged executable, generated config path, and canonical `resume` subcommand used manually—there is no wrapper algorithm. The service completes only after `redeem resume` completes. It is ordered before capture when both are starting, while the capture timer still delays its first run by one interval. Resume itself only reads history, and capture/prune retain their single-writer lock.
 
-A missing/not-ready `NIRI_SOCKET`, failed Niri query, or other applying failure is journal-visible. systemd retries the idempotent command after 3 seconds, at most five starts within 30 seconds, then stops; there is no unbounded or persistent loop. Ensure the Niri session imports `NIRI_SOCKET` into the user manager and Kitty/Zellij are installed in the user or system profile:
+The canonical command first polls Niri IPC in-process, bounded by `restore.resumeTimeout` at `restore.resumePollInterval`, before it selects a checkpoint. Manual and startup invocations therefore share the same readiness contract. The successful readiness snapshot is reused for initial reconciliation. A missing/not-ready `NIRI_SOCKET`, timed-out/failed Niri query, or other applying failure is actionable and journal-visible. systemd additionally retries the whole idempotent command after 3 seconds, at most five starts within 30 seconds, then stops; there is no unbounded or persistent loop. Ensure the Niri session imports `NIRI_SOCKET` into the user manager and Kitty/Zellij are installed in the user or system profile:
 
 ```bash
 systemctl --user show-environment | grep '^NIRI_SOCKET='
@@ -177,7 +177,7 @@ redeem restore tui
 redeem prune run --days 30
 ```
 
-Replay discards a malformed trailing event after a crash but reports corruption if malformed data appears before a later record. Snapshots remain an optional optimization. Capture and prune coordinate through a crash-recoverable advisory lock; a leftover `meta/lock` file is harmless, while prune still reports an active writer when the lock is held.
+Replay and `doctor` both ignore one malformed trailing event after a crash (doctor emits a non-failing note), but report corruption if a malformed record appears before a later record. Snapshots remain an optional optimization. Capture and prune coordinate through a crash-recoverable advisory lock; a leftover `meta/lock` file is harmless, while prune still reports an active writer when the lock is held.
 
 ## Deferred work
 

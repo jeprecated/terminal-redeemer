@@ -40,8 +40,8 @@ restore:
   workspaceReconcileDelay: 1200ms
   maxCheckpointAge: 24h       # implicit resume only; explicit restore is unaffected
   unresolvedWorkspace: current # current, skip, or fail
-  resumeTimeout: 10s          # bound for each apply wait/verification phase
-  resumePollInterval: 100ms
+  resumeTimeout: 10s          # bound for Niri readiness and each apply phase
+  resumePollInterval: 100ms   # readiness/evidence polling cadence
   terminal:
     command: kitty
     zellijAttachOrCreate: true
@@ -81,7 +81,7 @@ mirror:
 - `skip`: do not plan that terminal; or
 - `fail`: report the item as `failed`.
 
-CLI `--max-age` and `--unresolved-workspace` override these values for one invocation. `--timeout` and `--poll-interval` override the bounded apply waits. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume launches Kitty directly with argv ending in `zellij attach -- <session>` (the delimiter safely supports leading-dash names) and never uses attach-or-create. `terminal.command`/`--launcher-command` must name a Kitty executable directly, not a shell command or daemonizing wrapper; a launcher whose returned PID never appears as the Niri client fails explicitly rather than falling back to app ID or window order.
+CLI `--max-age` and `--unresolved-workspace` override these values for one invocation. `--timeout` and `--poll-interval` override the bounded in-process Niri-readiness wait and apply waits. Resume completes Niri readiness before checkpoint selection; the successful read is reused for initial reconciliation rather than queried twice. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume launches Kitty directly with argv ending in `zellij attach -- <session>` (the delimiter safely supports leading-dash names) and never uses attach-or-create. `terminal.command`/`--launcher-command` must name a Kitty executable directly, not a shell command or daemonizing wrapper; a launcher whose returned PID never appears as the Niri client fails explicitly rather than falling back to app ID or window order.
 
 ## Mirror flag mapping
 
@@ -135,3 +135,5 @@ Capture-only environment compatibility remains:
 
 - `REDEEM_NIRI_FIXTURE`
 - `REDEEM_NIRI_CMD`
+
+The distributed default `niri msg -j windows` and its `workspaces` companion execute directly as argv through `exec.CommandContext`; they do not invoke a shell or login profile. An explicitly configured non-default `capture.niriCommand` remains a compatibility shell command and runs via non-login `sh -c`.

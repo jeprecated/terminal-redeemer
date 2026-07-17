@@ -1,7 +1,6 @@
 package doctor
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -144,23 +143,18 @@ func (c EventsIntegrityCheck) Run(_ context.Context) Result {
 		_ = f.Close()
 	}()
 
-	scanner := bufio.NewScanner(f)
-	line := 0
-	for scanner.Scan() {
-		line++
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("line %d decode failed: %v", line, err)}
-		}
-		if err := event.Validate(); err != nil {
-			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("line %d invalid: %v", line, err)}
-		}
+	decoded, consumed, err := events.ReadLog(f)
+	if err != nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("event log corruption: %v", err)}
 	}
-	if err := scanner.Err(); err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("scan failed: %v", err)}
+	info, err := f.Stat()
+	if err != nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stat failed: %v", err)}
 	}
-
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events)", line)}
+	if consumed < info.Size() {
+		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events); ignored one malformed trailing record consistently with replay", len(decoded))}
+	}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events)", len(decoded))}
 }
 
 type SnapshotsIntegrityCheck struct {
@@ -334,9 +328,13 @@ func (c NiriReadinessCheck) Run(ctx context.Context) Result {
 	if strings.TrimSpace(c.Socket) == "" {
 		return Result{Name: c.Name(), Status: StatusFail, Detail: "NIRI_SOCKET is unset; run doctor in the Niri graphical session and import NIRI_SOCKET into the systemd user manager"}
 	}
-	binary, err := firstCommandToken(c.Command)
-	if err != nil {
-		return Result{Name: c.Name(), Status: StatusFail, Detail: err.Error()}
+	command := strings.TrimSpace(c.Command)
+	if command == "" {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: "Niri query command is empty"}
+	}
+	binary := "sh"
+	if command == niri.DefaultSnapshotCommand {
+		binary = "niri"
 	}
 	lookPath := c.LookPath
 	if lookPath == nil {

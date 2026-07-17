@@ -189,6 +189,27 @@ func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 	}
 }
 
+func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
+	stateDir := t.TempDir()
+	missingFixture := filepath.Join(t.TempDir(), "not-ready.json")
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("stateDir: "+stateDir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "resume", "--dry-run", "--fixture", missingFixture, "--timeout", "15ms", "--poll-interval", "2ms"}, &out, &stderr)
+	if code != 1 {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "resume Niri readiness failed") || !strings.Contains(stderr.String(), "verify NIRI_SOCKET") {
+		t.Fatalf("expected actionable readiness error, got %q", stderr.String())
+	}
+	if strings.Contains(out.String(), "resume_candidate") {
+		t.Fatalf("checkpoint selection ran before Niri readiness: %q", out.String())
+	}
+}
+
 func TestPrintResumePlanGuidesForensicSelectionForNonActionableCandidates(t *testing.T) {
 	for _, status := range []resume.CandidateStatus{resume.CandidateEmpty, resume.CandidateStale, resume.CandidateNotFound} {
 		t.Run(string(status), func(t *testing.T) {

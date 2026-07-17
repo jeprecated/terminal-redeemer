@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -266,13 +267,34 @@ func TestEventsIntegrityCheck(t *testing.T) {
 		t.Fatalf("expected pass, got %+v", pass)
 	}
 
+	eventsPath := filepath.Join(stateDir, "events.jsonl")
+	file, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("{bad-json\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	trailing := EventsIntegrityCheck{StateDir: stateDir}.Run(context.Background())
+	if trailing.Status != StatusPass || !strings.Contains(trailing.Detail, "ignored one malformed trailing record") {
+		t.Fatalf("expected replay-tolerated trailing corruption note, got %+v", trailing)
+	}
+
 	badStateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(badStateDir, "events.jsonl"), []byte("{bad-json\n"), 0o600); err != nil {
+	validPayload, err := json.Marshal(events.Event{V: 1, TS: time.Now().UTC(), Host: "h", Profile: "p", EventType: "window_patch", WindowKey: "w-2", Patch: map[string]any{"title": "x"}, StateHash: "sha256:y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonTrailing := append([]byte("{bad-json\n"), append(validPayload, '\n')...)
+	if err := os.WriteFile(filepath.Join(badStateDir, "events.jsonl"), nonTrailing, 0o600); err != nil {
 		t.Fatalf("write malformed events: %v", err)
 	}
 	fail := EventsIntegrityCheck{StateDir: badStateDir}.Run(context.Background())
-	if fail.Status != StatusFail {
-		t.Fatalf("expected fail, got %+v", fail)
+	if fail.Status != StatusFail || !strings.Contains(fail.Detail, "line 1") {
+		t.Fatalf("expected non-trailing corruption failure, got %+v", fail)
 	}
 
 	missing := EventsIntegrityCheck{StateDir: t.TempDir()}.Run(context.Background())
