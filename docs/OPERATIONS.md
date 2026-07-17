@@ -15,7 +15,9 @@ A non-Niri compositor cannot provide owned-window status/close. A non-Kitty laun
 
 ## Home Manager and NixOS
 
-Enable `programs.terminal-redeemer.enable = true`. Home Manager writes `~/.config/terminal-redeemer/config.yaml`, installs the selected package, and optionally manages capture/prune timers. The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`.
+Enable `programs.terminal-redeemer.enable = true`. Home Manager writes `~/.config/terminal-redeemer/config.yaml`, installs the selected package, and optionally manages capture/prune timers. The capture timer starts and stops with `graphical-session.target`, waits one configured interval before its first activation, and enables systemd's persistent timer behavior. Its default interval is 60 seconds (`capture.interval = "60s"`). Each activation runs the same `redeem capture once` full reconciliation available to operators. A failed Niri windows/workspaces query exits the oneshot visibly in the user journal without appending a partial checkpoint; the next timer activation retries from a fresh full query.
+
+The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`.
 
 Use build/evaluation before activation:
 

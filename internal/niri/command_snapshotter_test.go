@@ -42,21 +42,28 @@ func TestCommandSnapshotterError(t *testing.T) {
 	}
 }
 
-func TestCommandSnapshotterFallsBackToWindowsOnlyWhenWorkspacesCommandFails(t *testing.T) {
+func TestCommandSnapshotterRejectsIncompleteDefaultSnapshot(t *testing.T) {
 	t.Parallel()
 
-	runner := stubRunner{responses: map[string]stubResult{
-		"niri msg -j windows":    {out: []byte(`[{"id":1}]`)},
-		"niri msg -j workspaces": {err: errors.New("nope")},
-	}}
-	s := CommandSnapshotter{Command: "niri msg -j windows", Runner: runner}
-
-	got, err := s.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
+	tests := []struct {
+		name       string
+		workspaces stubResult
+	}{
+		{name: "workspace command fails", workspaces: stubResult{err: errors.New("nope")}},
+		{name: "workspace JSON is invalid", workspaces: stubResult{out: []byte(`not-json`)}},
 	}
-	if string(got) != `[{"id":1}]` {
-		t.Fatalf("expected windows-only fallback payload, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := stubRunner{responses: map[string]stubResult{
+				"niri msg -j windows":    {out: []byte(`[{"id":1}]`)},
+				"niri msg -j workspaces": tt.workspaces,
+			}}
+			s := CommandSnapshotter{Command: "niri msg -j windows", Runner: runner}
+
+			if _, err := s.Snapshot(context.Background()); err == nil {
+				t.Fatal("expected incomplete snapshot to fail")
+			}
+		})
 	}
 }
 

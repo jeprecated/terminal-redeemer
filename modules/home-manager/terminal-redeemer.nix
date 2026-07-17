@@ -225,7 +225,9 @@ in {
 
     systemd.user.services.terminal-redeemer-capture = lib.mkIf cfg.capture.enable {
       Unit = {
-        Description = "terminal-redeemer capture";
+        Description = "terminal-redeemer complete Niri state capture";
+        After = [ "graphical-session.target" ];
+        PartOf = [ "graphical-session.target" ];
       };
       Service = {
         Type = "oneshot";
@@ -235,14 +237,17 @@ in {
 
     systemd.user.timers.terminal-redeemer-capture = lib.mkIf cfg.capture.enable {
       Unit = {
-        Description = "terminal-redeemer periodic capture";
+        Description = "terminal-redeemer periodic complete state capture";
+        After = [ "graphical-session.target" ];
+        PartOf = [ "graphical-session.target" ];
       };
       Timer = {
-        OnBootSec = "1m";
+        OnActiveSec = cfg.capture.interval;
         OnUnitActiveSec = cfg.capture.interval;
+        Persistent = true;
         Unit = "terminal-redeemer-capture.service";
       };
-      Install.WantedBy = [ "timers.target" ];
+      Install.WantedBy = [ "graphical-session.target" ];
     };
 
     systemd.user.services.terminal-redeemer-prune = lib.mkIf cfg.retention.prune.enable {

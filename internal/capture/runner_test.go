@@ -69,6 +69,64 @@ func TestCaptureOnceWritesStateFullEveryTime(t *testing.T) {
 	}
 }
 
+func TestCaptureOnceFailureLeavesHistoryUntouchedAndNextRunRecovers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	eventStore, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new event store: %v", err)
+	}
+	snapStore, err := snapshots.NewStore(root)
+	if err != nil {
+		t.Fatalf("new snapshot store: %v", err)
+	}
+
+	recovered := model.State{
+		Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}},
+		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "recovered"}},
+	}
+	runner := NewRunner(Config{
+		Collector: &sequenceCollector{sequence: []collectResult{
+			{err: errors.New("temporary niri error")},
+			{state: recovered},
+		}},
+		DiffEngine:    diff.NewEngine(),
+		EventStore:    eventStore,
+		SnapshotStore: snapStore,
+		SnapshotEvery: 100,
+		Host:          "host-a",
+		Profile:       "default",
+		Source:        "test",
+	})
+
+	if _, err := runner.CaptureOnce(context.Background()); err == nil {
+		t.Fatal("expected first capture to fail")
+	}
+	got, _, err := eventStore.ReadSince(0)
+	if err != nil {
+		t.Fatalf("read history after failure: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("failed capture wrote %d events", len(got))
+	}
+
+	result, err := runner.CaptureOnce(context.Background())
+	if err != nil {
+		t.Fatalf("capture after recovery: %v", err)
+	}
+	if result.EventsWritten != 1 {
+		t.Fatalf("recovered capture wrote %d events, want 1", result.EventsWritten)
+	}
+	got, _, err = eventStore.ReadSince(0)
+	if err != nil {
+		t.Fatalf("read recovered history: %v", err)
+	}
+	if len(got) != 1 || got[0].EventType != "state_full" {
+		t.Fatalf("recovered history is not one full reconciliation: %#v", got)
+	}
+}
+
 func TestCaptureRunLoopsAndContinuesOnRecoverableErrors(t *testing.T) {
 	t.Parallel()
 

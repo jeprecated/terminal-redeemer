@@ -109,7 +109,9 @@
             };
             cfg = hmCfg.config;
             rendered = cfg.programs.terminal-redeemer.renderedConfig;
-            captureExecRaw = cfg.systemd.user.services.terminal-redeemer-capture.Service.ExecStart;
+            captureService = cfg.systemd.user.services.terminal-redeemer-capture;
+            captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
+            captureExecRaw = captureService.Service.ExecStart;
             pruneExecRaw = cfg.systemd.user.services.terminal-redeemer-prune.Service.ExecStart;
             captureExec = if builtins.isList captureExecRaw then builtins.concatStringsSep " " captureExecRaw else captureExecRaw;
             pruneExec = if builtins.isList pruneExecRaw then builtins.concatStringsSep " " pruneExecRaw else pruneExecRaw;
@@ -141,6 +143,15 @@
           assert builtins.match ".* prune run" pruneExec != null;
           assert builtins.match ".*--state-dir.*" captureExec == null;
           assert builtins.match ".*--days.*" pruneExec == null;
+          assert captureService.Service.Type == "oneshot";
+          assert builtins.elem "graphical-session.target" captureService.Unit.After;
+          assert builtins.elem "graphical-session.target" captureService.Unit.PartOf;
+          assert captureTimer.Timer.OnActiveSec == "30s";
+          assert captureTimer.Timer.OnUnitActiveSec == "30s";
+          assert captureTimer.Timer.Persistent;
+          assert builtins.elem "graphical-session.target" captureTimer.Unit.After;
+          assert builtins.elem "graphical-session.target" captureTimer.Unit.PartOf;
+          assert captureTimer.Install.WantedBy == [ "graphical-session.target" ];
           assert cfg.systemd.user.timers.terminal-redeemer-prune.Timer.OnCalendar == "hourly";
           hmCfg.activationPackage;
 
@@ -160,7 +171,13 @@
               ];
             };
             cfg = hmCfg.config;
+            rendered = cfg.programs.terminal-redeemer.renderedConfig;
+            captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
           in
+          assert rendered.capture.interval == "60s";
+          assert captureTimer.Timer.OnActiveSec == "60s";
+          assert captureTimer.Timer.OnUnitActiveSec == "60s";
+          assert captureTimer.Timer.Persistent;
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
           hmCfg.activationPackage;

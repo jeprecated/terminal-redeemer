@@ -37,13 +37,13 @@ func (s CommandSnapshotter) Snapshot(ctx context.Context) ([]byte, error) {
 		return out, nil
 	}
 
-	workspaces, workspacesErr := runner.Run(ctx, "niri msg -j workspaces")
-	if workspacesErr != nil {
-		return out, nil
+	workspaces, err := runner.Run(ctx, "niri msg -j workspaces")
+	if err != nil {
+		return nil, fmt.Errorf("run niri workspaces command: %w", err)
 	}
-	combined, combineErr := combineSnapshotPayloads(workspaces, out)
-	if combineErr != nil {
-		return out, nil
+	combined, err := combineSnapshotPayloads(workspaces, out)
+	if err != nil {
+		return nil, fmt.Errorf("combine niri snapshot payloads: %w", err)
 	}
 	return combined, nil
 }
