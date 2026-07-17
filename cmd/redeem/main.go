@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/bootid"
 	"github.com/jmo/terminal-redeemer/internal/capture"
 	"github.com/jmo/terminal-redeemer/internal/collector"
 	"github.com/jmo/terminal-redeemer/internal/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/prune"
 	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/restore"
+	"github.com/jmo/terminal-redeemer/internal/resume"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 	"github.com/jmo/terminal-redeemer/internal/tui"
 )
@@ -75,6 +77,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runMirror(args[1:], resolvedConfig, stdout, stderr)
 	case "restore":
 		return runRestore(args[1:], resolvedConfig, stdout, stderr)
+	case "resume":
+		return runResume(args[1:], resolvedConfig, stdout, stderr)
 	case "prune":
 		return runPrune(args[1:], resolvedConfig, stdout, stderr)
 	case "bottle":
@@ -530,6 +534,109 @@ func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Write
 		_, _ = fmt.Fprintf(stdout, "pasted_image mime=%s remote_path=%s\n", result.MIMEType, result.RemotePath)
 	}
 	return 0
+}
+
+func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
+	dryRun := fs.Bool("dry-run", false, "plan prior-boot terminal reconciliation without mutating")
+	maxAge := fs.Duration("max-age", resolvedConfig.Restore.MaxCheckpointAge, "maximum checkpoint age")
+	unresolved := fs.String("unresolved-workspace", resolvedConfig.Restore.UnresolvedWorkspace, "unresolved workspace policy: skip, current, or fail")
+	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
+	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "current Niri snapshot command")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if !*dryRun {
+		_, _ = fmt.Fprintln(stderr, "resume execution is not implemented in this planning milestone; rerun with --dry-run")
+		return 2
+	}
+	if *maxAge <= 0 {
+		_, _ = fmt.Fprintln(stderr, "resume --max-age must be positive")
+		return 2
+	}
+	policy := resume.UnresolvedWorkspacePolicy(strings.ToLower(strings.TrimSpace(*unresolved)))
+	if policy != resume.UnresolvedSkip && policy != resume.UnresolvedCurrent && policy != resume.UnresolvedFail {
+		_, _ = fmt.Fprintln(stderr, "resume --unresolved-workspace must be skip, current, or fail")
+		return 2
+	}
+
+	checkpoints, err := replay.ListCheckpoints(*stateDir)
+	if err != nil {
+		writef(stderr, "resume checkpoint scan failed: %v\n", err)
+		return 1
+	}
+	currentBootID, err := bootid.Current()
+	if err != nil {
+		writef(stderr, "resume boot ID failed: %v\n", err)
+		return 1
+	}
+	selection := resume.Select(checkpoints, resume.SelectOptions{
+		CurrentBootID: currentBootID,
+		Host:          resolvedConfig.Host,
+		Profile:       resolvedConfig.Profile,
+		Now:           time.Now().UTC(),
+		MaxAge:        *maxAge,
+	})
+
+	planner := resume.NewPlanner(resume.PlannerConfig{UnresolvedWorkspace: policy})
+	var current model.State
+	var available []string
+	if selection.Status == resume.CandidateReady {
+		var snapshotter collector.Snapshotter
+		if strings.TrimSpace(*fixture) != "" {
+			snapshotter = niri.FileSnapshotter{Path: *fixture}
+		} else {
+			snapshotter = niri.CommandSnapshotter{Command: *niriCmd}
+		}
+		enricher := procmeta.NewEnricher(procmeta.ProcReader{}, procmeta.Config{
+			Whitelist:         resolvedConfig.ProcessMetadata.Whitelist,
+			WhitelistExtra:    resolvedConfig.ProcessMetadata.WhitelistExtra,
+			IncludeSessionTag: true,
+		})
+		current, err = collector.New(snapshotter, enricher).Collect(context.Background())
+		if err != nil {
+			writef(stderr, "resume current Niri state failed: %v\n", err)
+			return 1
+		}
+		available, err = procmeta.NewZellijSessionVerifier(nil).List()
+		if err != nil {
+			writef(stderr, "resume Zellij session discovery failed: %v\n", err)
+			return 1
+		}
+	}
+
+	plan := planner.Build(selection, current, available)
+	printResumePlan(stdout, plan)
+	return 0
+}
+
+func printResumePlan(stdout io.Writer, plan resume.Plan) {
+	if plan.CandidateStatus == resume.CandidateNotFound {
+		writef(stdout, "resume_candidate status=%s reason=%q\n", plan.CandidateStatus, plan.Reason)
+	} else {
+		writef(stdout, "resume_candidate status=%s boot_id=%q captured_at=%s age=%s", plan.CandidateStatus, plan.BootID, plan.CapturedAt.UTC().Format(time.RFC3339Nano), plan.Age.Round(time.Second))
+		if plan.Reason != "" {
+			writef(stdout, " reason=%q", plan.Reason)
+		}
+		writeln(stdout)
+	}
+	for _, item := range plan.Items {
+		writef(stdout, "resume_item window_key=%q session=%q status=%s", item.WindowKey, item.Session, item.Status)
+		if item.Workspace != nil {
+			writef(stdout, " workspace_method=%s workspace_id=%q workspace_name=%q workspace_output=%q workspace_index=%d", item.Workspace.Method, item.Workspace.ID, item.Workspace.Name, item.Workspace.Output, item.Workspace.Index)
+		}
+		if item.Reason != "" {
+			writef(stdout, " reason=%q", item.Reason)
+		}
+		writeln(stdout)
+	}
+	writef(stdout, "resume_summary ready=%d already_open=%d unavailable=%d degraded=%d stale=%d failed=%d skipped=%d\n",
+		plan.Summary.Ready, plan.Summary.AlreadyOpen, plan.Summary.Unavailable, plan.Summary.Degraded, plan.Summary.Stale, plan.Summary.Failed, plan.Summary.Skipped)
 }
 
 func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -1345,6 +1452,7 @@ func printHelp(w io.Writer) {
 	writeln(w)
 	writeln(w, "Commands:")
 	writeln(w, "  capture   Capture window/session state")
+	writeln(w, "  resume    Plan prior-boot terminal reconciliation")
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")

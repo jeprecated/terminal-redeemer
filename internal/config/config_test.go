@@ -43,6 +43,9 @@ func TestLoadMissingDefaultPathUsesDefaults(t *testing.T) {
 	if cfg.Restore.WorkspaceReconcileDelay <= 0 {
 		t.Fatalf("expected positive workspace reconcile delay, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
+	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "skip" {
+		t.Fatalf("unexpected safe resume defaults: %#v", cfg.Restore)
+	}
 }
 
 func TestLoadMissingExplicitPathReturnsError(t *testing.T) {
@@ -77,6 +80,8 @@ restore:
     firefox: oneshot
   reconcileWorkspaceMoves: false
   workspaceReconcileDelay: 3s
+  maxCheckpointAge: 12h
+  unresolvedWorkspace: current
   terminal:
     command: foot
     zellijAttachOrCreate: false
@@ -154,11 +159,31 @@ mirror:
 	if cfg.Restore.WorkspaceReconcileDelay != 3*time.Second {
 		t.Fatalf("expected workspaceReconcileDelay 3s, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
+	if cfg.Restore.MaxCheckpointAge != 12*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" {
+		t.Fatalf("unexpected resume policy: %#v", cfg.Restore)
+	}
 	if cfg.Mirror.SourceHost != "source-a" || cfg.Mirror.SSHCommand != "custom-ssh" || cfg.Mirror.DefaultMode != "watch" {
 		t.Fatalf("unexpected mirror config: %#v", cfg.Mirror)
 	}
 	if cfg.Mirror.OpenDelay != 25*time.Millisecond || cfg.Mirror.Clipboard.TempDir != "/var/tmp" || cfg.Mirror.Clipboard.MIMETypes[0] != "image/webp" {
 		t.Fatalf("unexpected mirror timing/clipboard config: %#v", cfg.Mirror)
+	}
+}
+
+func TestLoadRejectsInvalidResumeConfig(t *testing.T) {
+	for name, payload := range map[string]string{
+		"non-positive age":  "restore:\n  maxCheckpointAge: 0s\n",
+		"unknown workspace": "restore:\n  unresolvedWorkspace: anywhere\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path, true); err == nil {
+				t.Fatal("expected invalid resume config error")
+			}
+		})
 	}
 }
 

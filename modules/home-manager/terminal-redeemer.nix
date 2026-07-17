@@ -24,6 +24,8 @@ let
       appMode = cfg.restore.appMode;
       reconcileWorkspaceMoves = cfg.restore.reconcileWorkspaceMoves;
       workspaceReconcileDelay = cfg.restore.workspaceReconcileDelay;
+      maxCheckpointAge = cfg.restore.maxCheckpointAge;
+      unresolvedWorkspace = cfg.restore.unresolvedWorkspace;
       terminal = {
         command = cfg.terminal.command;
         zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
@@ -167,6 +169,18 @@ in {
       type = lib.types.str;
       default = "1200ms";
       description = "Delay before workspace move reconciliation runs.";
+    };
+
+    restore.maxCheckpointAge = lib.mkOption {
+      type = lib.types.str;
+      default = "24h";
+      description = "Maximum age accepted by implicit prior-boot resume.";
+    };
+
+    restore.unresolvedWorkspace = lib.mkOption {
+      type = lib.types.enum [ "skip" "current" "fail" ];
+      default = "skip";
+      description = "Policy when a captured workspace cannot be resolved in current Niri state.";
     };
 
     terminal.command = lib.mkOption {

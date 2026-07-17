@@ -37,6 +37,8 @@ restore:
   appMode: {}                  # per_window or oneshot
   reconcileWorkspaceMoves: true
   workspaceReconcileDelay: 1200ms
+  maxCheckpointAge: 24h       # implicit resume only; explicit restore is unaffected
+  unresolvedWorkspace: skip  # skip, current, or fail
   terminal:
     command: kitty
     zellijAttachOrCreate: true
@@ -63,6 +65,18 @@ mirror:
 ```
 
 `host` and `mirror.sourceHost` are deliberately different: `host` labels locally captured history and source-side snapshot JSON, while `mirror.sourceHost` is the SSH destination used by a consuming machine.
+
+## Resume policy
+
+`redeem resume --dry-run` considers only complete, boot-aware checkpoints for the configured `host` and `profile`. It selects the newest checkpoint whose Linux boot ID differs from the current boot before checking whether that checkpoint is empty or stale. Legacy history without `boot_id` remains available to `restore apply --at` and `restore tui`, but is never selected implicitly.
+
+`restore.maxCheckpointAge` defaults to the conservative 24 hours. An older selected candidate is reported as `stale`; resume does not fall back to an older checkpoint. `restore.unresolvedWorkspace` controls a per-terminal result when no current workspace matches by name, output plus index, or index:
+
+- `skip` (default): do not plan that terminal;
+- `current`: plan it as `degraded`, leaving eventual placement on the current workspace; or
+- `fail`: report the item as `failed`.
+
+CLI `--max-age` and `--unresolved-workspace` override these values for one dry run. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume only verifies existing sessions and never plans attach-or-create.
 
 ## Mirror flag mapping
 

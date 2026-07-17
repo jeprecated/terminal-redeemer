@@ -89,6 +89,18 @@ The remote file is intentionally retained for the remote consumer. Arrange separ
 - image fallback only: inspect `wl-paste --list-types`, configured MIME preference, Kitty remote-control socket, and SCP command/options.
 - nested key interception: use the default fresh-Kitty launcher; the remote attach/watch command clears Zellij environment variables.
 
+## Prior-boot resume planning
+
+```bash
+redeem resume --dry-run
+```
+
+The dry run is non-mutating: it reads complete checkpoints, current Niri workspaces/windows and process metadata, and `zellij list-sessions --short`; it never attaches, creates, launches, or moves anything. Output starts with the selected prior boot ID and capture time, followed by stable `resume_item` records and a status-count summary. Item statuses include `ready`, `already_open`, `unavailable`, `degraded`, `stale`, `failed`, and `skipped`.
+
+The newest prior-boot candidate is authoritative even when it is empty. `empty`, `stale`, and `not_found` candidate statuses are visible no-ops rather than reasons to select older history. Use `redeem restore tui` or `redeem restore apply --at ...` for explicit forensic selection, including legacy records without boot IDs. Applying a resume plan is deferred to the next milestone; invoking `redeem resume` without `--dry-run` exits without mutation.
+
+Workspace resolution uses captured durable metadata in this order: exact name, output plus index, then index. See `restore.unresolvedWorkspace` in `docs/CONFIG.md` for unresolved-target behavior. An `already_open` result comes from an enriched current terminal window with the same verified Zellij session; mere presence in Zellij's session list means available, not open. Missing sessions are `unavailable` and are never recreated.
+
 ## Existing capture/restore operations
 
 ```bash

@@ -44,6 +44,8 @@ type RestoreConfig struct {
 	AppMode                 map[string]string `yaml:"appMode"`
 	ReconcileWorkspaceMoves bool              `yaml:"reconcileWorkspaceMoves"`
 	WorkspaceReconcileDelay time.Duration     `yaml:"workspaceReconcileDelay"`
+	MaxCheckpointAge        time.Duration     `yaml:"maxCheckpointAge"`
+	UnresolvedWorkspace     string            `yaml:"unresolvedWorkspace"`
 	Terminal                TerminalConfig    `yaml:"terminal"`
 }
 
@@ -119,6 +121,8 @@ func Defaults() Config {
 			AppMode:                 map[string]string{},
 			ReconcileWorkspaceMoves: true,
 			WorkspaceReconcileDelay: 1200 * time.Millisecond,
+			MaxCheckpointAge:        24 * time.Hour,
+			UnresolvedWorkspace:     "skip",
 			Terminal: TerminalConfig{
 				Command:              "kitty",
 				ZellijAttachOrCreate: true,
@@ -202,6 +206,14 @@ func Load(path string, explicitPath bool) (Config, error) {
 }
 
 func Validate(cfg Config) error {
+	if cfg.Restore.MaxCheckpointAge <= 0 {
+		return fmt.Errorf("restore.maxCheckpointAge must be positive")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Restore.UnresolvedWorkspace)) {
+	case "skip", "current", "fail":
+	default:
+		return fmt.Errorf("restore.unresolvedWorkspace must be skip, current, or fail")
+	}
 	if cfg.Mirror.DefaultMode != "attach" && cfg.Mirror.DefaultMode != "watch" {
 		return fmt.Errorf("mirror.defaultMode must be attach or watch")
 	}

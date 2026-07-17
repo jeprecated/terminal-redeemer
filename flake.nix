@@ -80,6 +80,8 @@
                     };
                     restore.reconcileWorkspaceMoves = false;
                     restore.workspaceReconcileDelay = "3s";
+                    restore.maxCheckpointAge = "12h";
+                    restore.unresolvedWorkspace = "current";
                     terminal.command = "foot";
                     terminal.zellijAttachOrCreate = false;
                     mirror = {
@@ -129,6 +131,8 @@
           assert rendered.restore.appMode.firefox == "oneshot";
           assert rendered.restore.reconcileWorkspaceMoves == false;
           assert rendered.restore.workspaceReconcileDelay == "3s";
+          assert rendered.restore.maxCheckpointAge == "12h";
+          assert rendered.restore.unresolvedWorkspace == "current";
           assert rendered.mirror.sourceHost == "source.example";
           assert rendered.mirror.sshOptions == [ "-p" "2222" ];
           assert rendered.mirror.snapshotCommand == [ "remote-redeem" "mirror" "snapshot" ];
@@ -176,6 +180,8 @@
             captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
           in
           assert rendered.capture.interval == "60s";
+          assert rendered.restore.maxCheckpointAge == "24h";
+          assert rendered.restore.unresolvedWorkspace == "skip";
           assert captureTimer.Timer.OnActiveSec == "60s";
           assert captureTimer.Timer.OnUnitActiveSec == "60s";
           assert !(captureTimer.Timer ? Persistent);

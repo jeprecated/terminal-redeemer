@@ -5,10 +5,48 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/model"
 )
+
+// Checkpoint is a complete captured state. BootID is empty for legacy
+// checkpoints, which remain useful to explicit historical restore callers.
+type Checkpoint struct {
+	CapturedAt time.Time
+	Host       string
+	Profile    string
+	BootID     string
+	State      model.State
+}
+
+// ListCheckpoints returns complete state_full records in capture order.
+// Incremental window patches are deliberately excluded: implicit resume must
+// only select a capture that represents a successfully completed query.
+func ListCheckpoints(root string) ([]Checkpoint, error) {
+	recorded, err := ListEvents(root, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Checkpoint, 0, len(recorded))
+	for _, event := range recorded {
+		if event.EventType != "state_full" {
+			continue
+		}
+		out = append(out, Checkpoint{
+			CapturedAt: event.TS,
+			Host:       event.Host,
+			Profile:    event.Profile,
+			BootID:     event.BootID,
+			State:      model.Normalize(decodeEventState(event.State)),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].CapturedAt.Before(out[j].CapturedAt) })
+	return out, nil
+}
 
 func ListEvents(root string, from *time.Time, to *time.Time) ([]events.Event, error) {
 	path := filepath.Join(root, "events.jsonl")

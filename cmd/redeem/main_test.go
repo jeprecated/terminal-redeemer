@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/replay"
 )
 
 func TestHelpByDefault(t *testing.T) {
@@ -64,6 +66,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
 		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
 		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
+		{name: "resume", args: []string{"resume", "--help"}},
 		{name: "prune run", args: []string{"prune", "run", "--help"}},
 	}
 
@@ -100,6 +103,7 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "restore apply missing at", args: []string{"restore", "apply"}, want: "restore apply requires --at"},
 		{name: "restore tui unknown flag", args: []string{"restore", "tui", "--no-such-flag"}, want: "flag provided but not defined"},
+		{name: "resume requires dry run", args: []string{"resume"}, want: "rerun with --dry-run"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 	}
 
@@ -119,6 +123,68 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 				t.Fatalf("expected stderr containing %q, got %q", tc.want, stderr.String())
 			}
 		})
+	}
+}
+
+func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC().Add(-time.Minute)
+	event := events.Event{
+		V: 1, TS: now, Host: "local", Profile: "default", BootID: "prior-boot",
+		EventType: "state_full", StateHash: "sha256:resume",
+		State: map[string]any{
+			"workspaces": []any{map[string]any{"id": "old-id", "index": 2, "name": "dev", "output": "DP-1"}},
+			"windows": []any{map[string]any{
+				"key": "w-terminal", "app_id": "kitty", "workspace_id": "old-id",
+				"workspace_ref": map[string]any{"name": "dev", "output": "DP-1", "index": 2},
+				"terminal":      map[string]any{"cwd": "/tmp/project", "session_tag": "session-a"},
+			}},
+		},
+	}
+	line, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "events.jsonl"), append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints, err := replay.ListCheckpoints(root)
+	if err != nil || len(checkpoints) != 1 {
+		t.Fatalf("checkpoint fixture invalid: count=%d err=%v", len(checkpoints), err)
+	}
+	fixture := filepath.Join(t.TempDir(), "niri.json")
+	if err := os.WriteFile(fixture, []byte(`{"workspaces":[{"id":"current-id","idx":5,"name":"dev","output":"DP-2"}],"windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "unexpected")
+	zellij := filepath.Join(bin, "zellij")
+	script := "#!/bin/sh\nif [ \"$1 $2\" != \"list-sessions --short\" ]; then echo x > " + marker + "; exit 9; fi\nprintf 'session-a\\n'\n"
+	if err := os.WriteFile(zellij, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("stateDir: "+root+"\nhost: local\nprofile: default\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, stderr bytes.Buffer
+	code := run([]string{"--config", configPath, "resume", "--dry-run", "--fixture", fixture}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("resume code = %d, stderr=%q", code, stderr.String())
+	}
+	for _, want := range []string{
+		`resume_candidate status=ready boot_id="prior-boot"`,
+		`resume_item window_key="w-terminal" session="session-a" status=ready workspace_method=name`,
+		"resume_summary ready=1 already_open=0 unavailable=0 degraded=0 stale=0 failed=0 skipped=0",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output missing %q: %s", want, out.String())
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("dry run attempted an unexpected Zellij command")
 	}
 }
 
