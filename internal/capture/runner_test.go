@@ -131,11 +131,12 @@ func TestSnapshotCadenceHonored(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	eventStore, err := events.NewStore(root)
+	bootSource := func() (string, error) { return "boot-capture-test", nil }
+	eventStore, err := events.NewStoreWithBootIDSource(root, bootSource)
 	if err != nil {
 		t.Fatalf("new event store: %v", err)
 	}
-	snapStore, err := snapshots.NewStore(root)
+	snapStore, err := snapshots.NewStoreWithBootIDSource(root, bootSource)
 	if err != nil {
 		t.Fatalf("new snapshot store: %v", err)
 	}
@@ -174,6 +175,22 @@ func TestSnapshotCadenceHonored(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected one snapshot at cadence 2, got %d", len(entries))
+	}
+	writtenEvents, _, err := eventStore.ReadSince(0)
+	if err != nil {
+		t.Fatalf("read captured events: %v", err)
+	}
+	for i, event := range writtenEvents {
+		if event.BootID != "boot-capture-test" {
+			t.Fatalf("event[%d] boot ID = %q", i, event.BootID)
+		}
+	}
+	writtenSnapshot, err := snapStore.Read(entries[0])
+	if err != nil {
+		t.Fatalf("read captured snapshot: %v", err)
+	}
+	if writtenSnapshot.BootID != "boot-capture-test" {
+		t.Fatalf("snapshot boot ID = %q", writtenSnapshot.BootID)
 	}
 }
 

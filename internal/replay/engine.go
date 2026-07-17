@@ -1,7 +1,6 @@
 package replay
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,15 +63,11 @@ func (e *Engine) At(at time.Time) (model.State, error) {
 		windowsByKey[window.Key] = window
 	}
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if err := event.Validate(); err != nil {
-			continue
-		}
+	tail, _, err := events.ReadLog(f)
+	if err != nil {
+		return model.State{}, fmt.Errorf("read event log: %w", err)
+	}
+	for _, event := range tail {
 		if event.TS.After(at) {
 			continue
 		}
@@ -86,9 +81,6 @@ func (e *Engine) At(at time.Time) (model.State, error) {
 				windowsByKey[window.Key] = window
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return model.State{}, fmt.Errorf("scan events: %w", err)
 	}
 
 	state.Windows = make([]model.Window, 0, len(windowsByKey))

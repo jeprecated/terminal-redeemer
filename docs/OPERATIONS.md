@@ -98,7 +98,7 @@ redeem restore tui
 redeem prune run --days 30
 ```
 
-Replay tolerates malformed event lines and snapshots remain an optional optimization. Stop active capture if prune reports an active writer lock.
+Replay discards a malformed trailing event after a crash but reports corruption if malformed data appears before a later record. Snapshots remain an optional optimization. Capture and prune coordinate through a crash-recoverable advisory lock; a leftover `meta/lock` file is harmless, while prune still reports an active writer when the lock is held.
 
 ## Deferred work
 

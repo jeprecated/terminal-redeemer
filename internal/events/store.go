@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jmo/terminal-redeemer/internal/bootid"
+	"github.com/jmo/terminal-redeemer/internal/storelock"
 )
 
 var ErrLocked = errors.New("event store is locked")
@@ -19,6 +22,7 @@ type Event struct {
 	TS        time.Time      `json:"ts"`
 	Host      string         `json:"host"`
 	Profile   string         `json:"profile"`
+	BootID    string         `json:"boot_id,omitempty"`
 	EventType string         `json:"event_type"`
 	WindowKey string         `json:"window_key,omitempty"`
 	Patch     map[string]any `json:"patch,omitempty"`
@@ -39,6 +43,9 @@ func (e Event) Validate() error {
 	}
 	if strings.TrimSpace(e.Profile) == "" {
 		return errors.New("profile is required")
+	}
+	if e.BootID != "" && strings.TrimSpace(e.BootID) == "" {
+		return errors.New("boot_id must not be blank")
 	}
 	if strings.TrimSpace(e.EventType) == "" {
 		return errors.New("event_type is required")
@@ -65,60 +72,84 @@ func (e Event) Validate() error {
 }
 
 type Store struct {
-	eventsPath string
-	lockPath   string
+	eventsPath   string
+	root         string
+	bootIDSource bootid.Source
+	syncFile     func(*os.File) error
 }
 
 func NewStore(root string) (*Store, error) {
+	return NewStoreWithBootIDSource(root, bootid.Current)
+}
+
+func NewStoreWithBootIDSource(root string, source bootid.Source) (*Store, error) {
+	if source == nil {
+		source = bootid.Current
+	}
 	if err := os.MkdirAll(filepath.Join(root, "meta"), 0o755); err != nil {
 		return nil, fmt.Errorf("create meta dir: %w", err)
 	}
 
 	eventsPath := filepath.Join(root, "events.jsonl")
-	if _, err := os.Stat(eventsPath); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(eventsPath, nil, 0o600); err != nil {
-			return nil, fmt.Errorf("create events file: %w", err)
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("stat events file: %w", err)
+	file, err := os.OpenFile(eventsPath, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create events file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("sync events file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return nil, fmt.Errorf("close events file: %w", err)
+	}
+	if err := syncDir(root); err != nil {
+		return nil, fmt.Errorf("sync state dir: %w", err)
 	}
 
 	return &Store{
-		eventsPath: eventsPath,
-		lockPath:   filepath.Join(root, "meta", "lock"),
+		eventsPath:   eventsPath,
+		root:         root,
+		bootIDSource: source,
+		syncFile:     func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
 type Writer struct {
-	lockPath string
-	file     *os.File
+	lock         *storelock.Lock
+	file         *os.File
+	bootIDSource bootid.Source
+	syncFile     func(*os.File) error
 }
 
 func (s *Store) AcquireWriter() (*Writer, error) {
-	lockFile, err := os.OpenFile(s.lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, os.ErrExist) {
+	lock, err := storelock.Acquire(s.root)
+	if errors.Is(err, storelock.ErrLocked) {
 		return nil, ErrLocked
 	}
 	if err != nil {
-		return nil, fmt.Errorf("create lock file: %w", err)
+		return nil, err
 	}
-	if _, err := fmt.Fprintf(lockFile, "%d\n", os.Getpid()); err != nil {
-		_ = lockFile.Close()
-		_ = os.Remove(s.lockPath)
-		return nil, fmt.Errorf("write lock file: %w", err)
-	}
-	_ = lockFile.Close()
 
-	eventsFile, err := os.OpenFile(s.eventsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	eventsFile, err := os.OpenFile(s.eventsPath, os.O_APPEND|os.O_RDWR, 0o600)
 	if err != nil {
-		_ = os.Remove(s.lockPath)
+		_ = lock.Close()
 		return nil, fmt.Errorf("open events file: %w", err)
 	}
+	if err := repairTrailingRecord(eventsFile, s.syncFile); err != nil {
+		_ = eventsFile.Close()
+		_ = lock.Close()
+		return nil, err
+	}
 
-	return &Writer{lockPath: s.lockPath, file: eventsFile}, nil
+	return &Writer{lock: lock, file: eventsFile, bootIDSource: s.bootIDSource, syncFile: s.syncFile}, nil
 }
 
 func (w *Writer) Append(event Event) (int64, error) {
+	id, err := w.bootIDSource()
+	if err != nil {
+		return 0, err
+	}
+	event.BootID = id
 	if err := event.Validate(); err != nil {
 		return 0, err
 	}
@@ -129,8 +160,15 @@ func (w *Writer) Append(event Event) (int64, error) {
 	}
 	payload = append(payload, '\n')
 
-	if _, err := w.file.Write(payload); err != nil {
+	written, err := w.file.Write(payload)
+	if err != nil {
 		return 0, fmt.Errorf("append event: %w", err)
+	}
+	if written != len(payload) {
+		return 0, io.ErrShortWrite
+	}
+	if err := w.syncFile(w.file); err != nil {
+		return 0, fmt.Errorf("sync appended event: %w", err)
 	}
 
 	offset, err := w.file.Seek(0, io.SeekCurrent)
@@ -142,15 +180,17 @@ func (w *Writer) Append(event Event) (int64, error) {
 }
 
 func (w *Writer) Close() error {
-	errFile := w.file.Close()
-	errLock := os.Remove(w.lockPath)
-	if errFile != nil {
-		return errFile
+	if w == nil {
+		return nil
 	}
-	if errLock != nil && !errors.Is(errLock, os.ErrNotExist) {
-		return errLock
+	var fileErr error
+	if w.file != nil {
+		fileErr = w.file.Close()
+		w.file = nil
 	}
-	return nil
+	lockErr := w.lock.Close()
+	w.lock = nil
+	return errors.Join(fileErr, lockErr)
 }
 
 func (s *Store) ReadSince(cursor int64) ([]Event, int64, error) {
@@ -166,27 +206,110 @@ func (s *Store) ReadSince(cursor int64) ([]Event, int64, error) {
 		return nil, cursor, fmt.Errorf("seek to cursor: %w", err)
 	}
 
-	var out []Event
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var event Event
-		if err := json.Unmarshal(line, &event); err != nil {
-			return nil, cursor, fmt.Errorf("decode event: %w", err)
-		}
-		if err := event.Validate(); err != nil {
-			return nil, cursor, fmt.Errorf("validate event: %w", err)
-		}
-		out = append(out, event)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, cursor, fmt.Errorf("scan events: %w", err)
-	}
-
-	nextCursor, err := f.Seek(0, io.SeekCurrent)
+	out, consumed, err := ReadLog(f)
 	if err != nil {
-		return nil, cursor, fmt.Errorf("read current cursor: %w", err)
+		return nil, cursor, err
 	}
+	return out, cursor + consumed, nil
+}
 
-	return out, nextCursor, nil
+// ReadLog decodes complete events from r. A malformed final record is ignored
+// and excluded from consumed so a later read can retry it after recovery. Any
+// malformed record followed by more data is corruption and returns an error.
+func ReadLog(r io.Reader) ([]Event, int64, error) {
+	reader := bufio.NewReader(r)
+	out := make([]Event, 0)
+	var consumed int64
+	lineNumber := 0
+
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) == 0 && errors.Is(readErr, io.EOF) {
+			return out, consumed, nil
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return nil, consumed, fmt.Errorf("read events: %w", readErr)
+		}
+		lineNumber++
+
+		payload := line
+		if len(payload) > 0 && payload[len(payload)-1] == '\n' {
+			payload = payload[:len(payload)-1]
+		}
+		var event Event
+		decodeErr := json.Unmarshal(payload, &event)
+		if decodeErr == nil {
+			decodeErr = event.Validate()
+		}
+		if decodeErr != nil {
+			_, peekErr := reader.Peek(1)
+			if errors.Is(peekErr, io.EOF) {
+				return out, consumed, nil
+			}
+			if peekErr != nil {
+				return nil, consumed, fmt.Errorf("inspect events after line %d: %w", lineNumber, peekErr)
+			}
+			return nil, consumed, fmt.Errorf("invalid event at line %d: %w", lineNumber, decodeErr)
+		}
+
+		out = append(out, event)
+		consumed += int64(len(line))
+		if errors.Is(readErr, io.EOF) {
+			return out, consumed, nil
+		}
+	}
+}
+
+func repairTrailingRecord(file *os.File, syncFile func(*os.File) error) error {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek event log for recovery: %w", err)
+	}
+	_, consumed, err := ReadLog(file)
+	if err != nil {
+		return fmt.Errorf("validate event log before append: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat event log: %w", err)
+	}
+	if consumed < info.Size() {
+		if err := file.Truncate(consumed); err != nil {
+			return fmt.Errorf("truncate malformed trailing event: %w", err)
+		}
+		if err := syncFile(file); err != nil {
+			return fmt.Errorf("sync repaired event log: %w", err)
+		}
+		info, err = file.Stat()
+		if err != nil {
+			return fmt.Errorf("stat repaired event log: %w", err)
+		}
+	}
+	if info.Size() > 0 {
+		last := []byte{0}
+		if _, err := file.ReadAt(last, info.Size()-1); err != nil {
+			return fmt.Errorf("read event log terminator: %w", err)
+		}
+		if last[0] != '\n' {
+			written, err := file.Write([]byte{'\n'})
+			if err != nil {
+				return fmt.Errorf("terminate final event: %w", err)
+			}
+			if written != 1 {
+				return io.ErrShortWrite
+			}
+			if err := syncFile(file); err != nil {
+				return fmt.Errorf("sync event terminator: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
