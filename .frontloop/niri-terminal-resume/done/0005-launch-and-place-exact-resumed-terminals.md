@@ -28,3 +28,29 @@ Implement applying resume so each captured Zellij session is attached in one Kit
 ## Implementation Notes
 
 Primary areas: internal/restore, internal/niri, command runners, cmd/redeem, and integration fakes. Avoid shell-string execution for the outer Kitty launch. ADR: docs/adr/0001-resume-zellij-terminals-in-niri.md.
+
+
+## Completion Summary
+
+- Implemented applying `redeem resume` with direct Kitty argv and attach-only `zellij attach -- <session>` semantics.
+- Correlated each launched Kitty client to exactly one Niri window by retained client PID, with bounded polling and no app-ID/order fallback.
+- Required two consecutive live attachment observations plus verified workspace movement before reporting `restored`.
+- Kept failures item-isolated with conservative process cleanup, move-failure no-duplicate behavior, and rerun/in-execution idempotence.
+- Applied floating and sizing metadata only through exact window-ID actions and reported optional layout degradation separately; column order remains explicitly unsupported.
+- Added adversarial integration fakes for multiple sessions, unrelated windows, ambiguity, timeout, attach failure/race, failed/unobserved moves, degraded input, reruns, and unsupported correlation.
+- Passed independent Opus ACCEPT/re-ACCEPT, parent `go test ./...` (228 tests), resume race tests (37 tests), and `nix flake check 'path:.'`.
+
+### Files Changed
+
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- docs/CONFIG.md
+- docs/OPERATIONS.md
+- internal/config/config.go
+- internal/config/config_test.go
+- internal/resume/executor.go
+- internal/resume/executor_test.go
+- internal/resume/planner.go
+- internal/resume/runtime.go
+- internal/resume/runtime_test.go
+- modules/home-manager/terminal-redeemer.nix
