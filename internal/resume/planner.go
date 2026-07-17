@@ -16,6 +16,7 @@ type Status string
 
 const (
 	StatusReady       Status = "ready"
+	StatusRestored    Status = "restored"
 	StatusAlreadyOpen Status = "already_open"
 	StatusUnavailable Status = "unavailable"
 	StatusDegraded    Status = "degraded"
@@ -135,7 +136,10 @@ type Item struct {
 	Status            Status
 	Reason            string
 	CapturedWorkspace model.WorkspaceRef
+	CapturedPlacement *model.Placement
 	Workspace         *WorkspaceTarget
+	LayoutStatus      LayoutStatus
+	LayoutReason      string
 }
 
 type Plan struct {
@@ -150,6 +154,7 @@ type Plan struct {
 
 type Summary struct {
 	Ready       int
+	Restored    int
 	AlreadyOpen int
 	Unavailable int
 	Degraded    int
@@ -284,6 +289,12 @@ func workspaceTarget(workspace model.Workspace, method string) WorkspaceTarget {
 
 func newItem(window model.Window, state model.State) Item {
 	item := Item{WindowKey: window.Key, AppID: window.AppID}
+	if window.Placement != nil {
+		placement := *window.Placement
+		placement.TileSize = append([]float64(nil), placement.TileSize...)
+		placement.WindowSize = append([]int(nil), placement.WindowSize...)
+		item.CapturedPlacement = &placement
+	}
 	if window.Terminal != nil {
 		item.Session = strings.TrimSpace(window.Terminal.SessionTag)
 		item.CWD = strings.TrimSpace(window.Terminal.CWD)
@@ -356,6 +367,8 @@ func (p *Plan) summarize() {
 		switch item.Status {
 		case StatusReady:
 			p.Summary.Ready++
+		case StatusRestored:
+			p.Summary.Restored++
 		case StatusAlreadyOpen:
 			p.Summary.AlreadyOpen++
 		case StatusUnavailable:

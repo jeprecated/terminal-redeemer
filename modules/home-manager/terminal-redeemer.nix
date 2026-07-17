@@ -26,6 +26,8 @@ let
       workspaceReconcileDelay = cfg.restore.workspaceReconcileDelay;
       maxCheckpointAge = cfg.restore.maxCheckpointAge;
       unresolvedWorkspace = cfg.restore.unresolvedWorkspace;
+      resumeTimeout = cfg.restore.resumeTimeout;
+      resumePollInterval = cfg.restore.resumePollInterval;
       terminal = {
         command = cfg.terminal.command;
         zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
@@ -181,6 +183,18 @@ in {
       type = lib.types.enum [ "skip" "current" "fail" ];
       default = "current";
       description = "Policy when a captured workspace cannot be resolved in current Niri state.";
+    };
+
+    restore.resumeTimeout = lib.mkOption {
+      type = lib.types.str;
+      default = "10s";
+      description = "Bound for each resume correlation, attachment, and move-verification phase.";
+    };
+
+    restore.resumePollInterval = lib.mkOption {
+      type = lib.types.str;
+      default = "100ms";
+      description = "Polling interval while resume waits for exact Niri and Zellij evidence.";
     };
 
     terminal.command = lib.mkOption {

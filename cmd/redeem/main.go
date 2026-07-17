@@ -545,18 +545,21 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	unresolved := fs.String("unresolved-workspace", resolvedConfig.Restore.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "current Niri snapshot command")
+	launcher := fs.String("launcher-command", resolvedConfig.Restore.Terminal.Command, "Kitty executable (not a shell command)")
+	timeout := fs.Duration("timeout", resolvedConfig.Restore.ResumeTimeout, "per-phase correlation, attachment, and move timeout")
+	pollInterval := fs.Duration("poll-interval", resolvedConfig.Restore.ResumePollInterval, "Niri and attachment poll interval")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
 		return 2
 	}
-	if !*dryRun {
-		_, _ = fmt.Fprintln(stderr, "resume execution is not implemented in this planning milestone; rerun with --dry-run")
-		return 2
-	}
 	if *maxAge <= 0 {
 		_, _ = fmt.Fprintln(stderr, "resume --max-age must be positive")
+		return 2
+	}
+	if *timeout <= 0 || *pollInterval <= 0 || *pollInterval > *timeout {
+		_, _ = fmt.Fprintln(stderr, "resume --timeout and --poll-interval must be positive, and poll interval must not exceed timeout")
 		return 2
 	}
 	policy := resume.UnresolvedWorkspacePolicy(strings.ToLower(strings.TrimSpace(*unresolved)))
@@ -583,16 +586,16 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		MaxAge:        *maxAge,
 	})
 
+	var snapshotter collector.Snapshotter
+	if strings.TrimSpace(*fixture) != "" {
+		snapshotter = niri.FileSnapshotter{Path: *fixture}
+	} else {
+		snapshotter = niri.CommandSnapshotter{Command: *niriCmd}
+	}
 	planner := resume.NewPlanner(resume.PlannerConfig{UnresolvedWorkspace: policy})
 	var current model.State
 	var available []string
 	if selection.Status == resume.CandidateReady {
-		var snapshotter collector.Snapshotter
-		if strings.TrimSpace(*fixture) != "" {
-			snapshotter = niri.FileSnapshotter{Path: *fixture}
-		} else {
-			snapshotter = niri.CommandSnapshotter{Command: *niriCmd}
-		}
 		enricher := procmeta.NewEnricher(procmeta.ProcReader{}, procmeta.Config{
 			Whitelist:         resolvedConfig.ProcessMetadata.Whitelist,
 			WhitelistExtra:    resolvedConfig.ProcessMetadata.WhitelistExtra,
@@ -611,7 +614,22 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	}
 
 	plan := planner.Build(selection, current, available)
+	if !*dryRun && selection.Status == resume.CandidateReady {
+		actions := resume.NiriActions{Runner: resume.ExecActionRunner{Command: "niri"}}
+		executor := resume.Executor{
+			Config:   resume.ExecutorConfig{LauncherCommand: *launcher, Timeout: *timeout, PollInterval: *pollInterval},
+			Launcher: resume.ExecLauncher{},
+			Observer: resume.SnapshotObserver{Source: snapshotter},
+			Probe:    resume.ProcAttachmentProbe{},
+			Mover:    actions,
+			Layout:   actions,
+		}
+		plan = executor.Apply(context.Background(), plan)
+	}
 	printResumePlan(stdout, plan)
+	if !*dryRun && plan.Summary.Failed > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -633,13 +651,19 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 		if item.Workspace != nil {
 			writef(stdout, " workspace_method=%s workspace_id=%q workspace_name=%q workspace_output=%q workspace_index=%d", item.Workspace.Method, item.Workspace.ID, item.Workspace.Name, item.Workspace.Output, item.Workspace.Index)
 		}
+		if item.LayoutStatus != "" {
+			writef(stdout, " layout_status=%s", item.LayoutStatus)
+			if item.LayoutReason != "" {
+				writef(stdout, " layout_reason=%q", item.LayoutReason)
+			}
+		}
 		if item.Reason != "" {
 			writef(stdout, " reason=%q", item.Reason)
 		}
 		writeln(stdout)
 	}
-	writef(stdout, "resume_summary ready=%d already_open=%d unavailable=%d degraded=%d stale=%d failed=%d skipped=%d\n",
-		plan.Summary.Ready, plan.Summary.AlreadyOpen, plan.Summary.Unavailable, plan.Summary.Degraded, plan.Summary.Stale, plan.Summary.Failed, plan.Summary.Skipped)
+	writef(stdout, "resume_summary ready=%d already_open=%d unavailable=%d degraded=%d stale=%d failed=%d skipped=%d restored=%d\n",
+		plan.Summary.Ready, plan.Summary.AlreadyOpen, plan.Summary.Unavailable, plan.Summary.Degraded, plan.Summary.Stale, plan.Summary.Failed, plan.Summary.Skipped, plan.Summary.Restored)
 }
 
 func runRestore(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -1455,7 +1479,7 @@ func printHelp(w io.Writer) {
 	writeln(w)
 	writeln(w, "Commands:")
 	writeln(w, "  capture   Capture window/session state")
-	writeln(w, "  resume    Plan prior-boot terminal reconciliation")
+	writeln(w, "  resume    Reconcile prior-boot terminal sessions")
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")

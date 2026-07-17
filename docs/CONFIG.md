@@ -39,6 +39,8 @@ restore:
   workspaceReconcileDelay: 1200ms
   maxCheckpointAge: 24h       # implicit resume only; explicit restore is unaffected
   unresolvedWorkspace: current # current, skip, or fail
+  resumeTimeout: 10s          # bound for each apply wait/verification phase
+  resumePollInterval: 100ms
   terminal:
     command: kitty
     zellijAttachOrCreate: true
@@ -76,7 +78,7 @@ mirror:
 - `skip`: do not plan that terminal; or
 - `fail`: report the item as `failed`.
 
-CLI `--max-age` and `--unresolved-workspace` override these values for one dry run. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume only verifies existing sessions and never plans attach-or-create.
+CLI `--max-age` and `--unresolved-workspace` override these values for one invocation. `--timeout` and `--poll-interval` override the bounded apply waits. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume launches Kitty directly with argv ending in `zellij attach <session>` and never uses attach-or-create. `terminal.command`/`--launcher-command` must name a Kitty executable directly, not a shell command or daemonizing wrapper; a launcher whose returned PID never appears as the Niri client fails explicitly rather than falling back to app ID or window order.
 
 ## Mirror flag mapping
 

@@ -104,7 +104,7 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 		{name: "mirror snapshot unknown flag", args: []string{"mirror", "snapshot", "--no-such-flag"}, want: "flag provided but not defined"},
 		{name: "restore apply missing at", args: []string{"restore", "apply"}, want: "restore apply requires --at"},
 		{name: "restore tui unknown flag", args: []string{"restore", "tui", "--no-such-flag"}, want: "flag provided but not defined"},
-		{name: "resume requires dry run", args: []string{"resume"}, want: "rerun with --dry-run"},
+		{name: "resume invalid timeout", args: []string{"resume", "--timeout", "0s"}, want: "--timeout and --poll-interval must be positive"},
 		{name: "prune run unknown flag", args: []string{"prune", "run", "--no-such-flag"}, want: "flag provided but not defined"},
 	}
 

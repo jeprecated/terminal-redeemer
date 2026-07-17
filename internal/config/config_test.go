@@ -43,7 +43,7 @@ func TestLoadMissingDefaultPathUsesDefaults(t *testing.T) {
 	if cfg.Restore.WorkspaceReconcileDelay <= 0 {
 		t.Fatalf("expected positive workspace reconcile delay, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
-	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" {
+	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" || cfg.Restore.ResumeTimeout != 10*time.Second || cfg.Restore.ResumePollInterval != 100*time.Millisecond {
 		t.Fatalf("unexpected safe resume defaults: %#v", cfg.Restore)
 	}
 }
@@ -82,6 +82,8 @@ restore:
   workspaceReconcileDelay: 3s
   maxCheckpointAge: 12h
   unresolvedWorkspace: current
+  resumeTimeout: 8s
+  resumePollInterval: 25ms
   terminal:
     command: foot
     zellijAttachOrCreate: false
@@ -159,7 +161,7 @@ mirror:
 	if cfg.Restore.WorkspaceReconcileDelay != 3*time.Second {
 		t.Fatalf("expected workspaceReconcileDelay 3s, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
-	if cfg.Restore.MaxCheckpointAge != 12*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" {
+	if cfg.Restore.MaxCheckpointAge != 12*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" || cfg.Restore.ResumeTimeout != 8*time.Second || cfg.Restore.ResumePollInterval != 25*time.Millisecond {
 		t.Fatalf("unexpected resume policy: %#v", cfg.Restore)
 	}
 	if cfg.Mirror.SourceHost != "source-a" || cfg.Mirror.SSHCommand != "custom-ssh" || cfg.Mirror.DefaultMode != "watch" {
@@ -172,8 +174,10 @@ mirror:
 
 func TestLoadRejectsInvalidResumeConfig(t *testing.T) {
 	for name, payload := range map[string]string{
-		"non-positive age":  "restore:\n  maxCheckpointAge: 0s\n",
-		"unknown workspace": "restore:\n  unresolvedWorkspace: anywhere\n",
+		"non-positive age":     "restore:\n  maxCheckpointAge: 0s\n",
+		"non-positive timeout": "restore:\n  resumeTimeout: 0s\n",
+		"poll exceeds timeout": "restore:\n  resumeTimeout: 1s\n  resumePollInterval: 2s\n",
+		"unknown workspace":    "restore:\n  unresolvedWorkspace: anywhere\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")

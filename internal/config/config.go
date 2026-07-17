@@ -46,6 +46,8 @@ type RestoreConfig struct {
 	WorkspaceReconcileDelay time.Duration     `yaml:"workspaceReconcileDelay"`
 	MaxCheckpointAge        time.Duration     `yaml:"maxCheckpointAge"`
 	UnresolvedWorkspace     string            `yaml:"unresolvedWorkspace"`
+	ResumeTimeout           time.Duration     `yaml:"resumeTimeout"`
+	ResumePollInterval      time.Duration     `yaml:"resumePollInterval"`
 	Terminal                TerminalConfig    `yaml:"terminal"`
 }
 
@@ -123,6 +125,8 @@ func Defaults() Config {
 			WorkspaceReconcileDelay: 1200 * time.Millisecond,
 			MaxCheckpointAge:        24 * time.Hour,
 			UnresolvedWorkspace:     "current",
+			ResumeTimeout:           10 * time.Second,
+			ResumePollInterval:      100 * time.Millisecond,
 			Terminal: TerminalConfig{
 				Command:              "kitty",
 				ZellijAttachOrCreate: true,
@@ -208,6 +212,12 @@ func Load(path string, explicitPath bool) (Config, error) {
 func Validate(cfg Config) error {
 	if cfg.Restore.MaxCheckpointAge <= 0 {
 		return fmt.Errorf("restore.maxCheckpointAge must be positive")
+	}
+	if cfg.Restore.ResumeTimeout <= 0 || cfg.Restore.ResumePollInterval <= 0 {
+		return fmt.Errorf("restore.resumeTimeout and restore.resumePollInterval must be positive")
+	}
+	if cfg.Restore.ResumePollInterval > cfg.Restore.ResumeTimeout {
+		return fmt.Errorf("restore.resumePollInterval must not exceed restore.resumeTimeout")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Restore.UnresolvedWorkspace)) {
 	case "skip", "current", "fail":
