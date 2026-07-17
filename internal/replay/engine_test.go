@@ -77,7 +77,7 @@ func TestReplayWithSnapshotAndTail(t *testing.T) {
 	}
 }
 
-func TestReplaySkipsCorruptedLine(t *testing.T) {
+func TestReplayRejectsCorruptionBeforeACompleteLaterEvent(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -115,12 +115,49 @@ func TestReplaySkipsCorruptedLine(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 
-	state, err := engine.At(t0.Add(2 * time.Second))
-	if err != nil {
-		t.Fatalf("replay at: %v", err)
+	if _, err := engine.At(t0.Add(2 * time.Second)); err == nil {
+		t.Fatal("expected replay to reject non-trailing corruption")
 	}
-	if len(state.Windows) != 1 || state.Windows[0].Title != "b" {
-		t.Fatalf("expected replay to skip corrupt line and apply valid one, got %#v", state.Windows)
+}
+
+func TestReplayIgnoresMalformedTrailingEventAndPreservesPrefix(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	eventStore, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new event store: %v", err)
+	}
+	writer, err := eventStore.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	t0 := time.Date(2026, 2, 15, 10, 0, 0, 0, time.UTC)
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1", Patch: map[string]any{"app_id": "kitty", "workspace_id": "ws-1", "title": "complete"}, StateHash: "sha256:a"}); err != nil {
+		t.Fatalf("append complete event: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(root, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open events file: %v", err)
+	}
+	if _, err := f.WriteString(`{"v":1,"ts":"2026-02-15`); err != nil {
+		t.Fatalf("write truncated tail: %v", err)
+	}
+	_ = f.Close()
+
+	engine, err := NewEngine(root)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	state, err := engine.At(t0.Add(time.Second))
+	if err != nil {
+		t.Fatalf("replay truncated tail: %v", err)
+	}
+	if len(state.Windows) != 1 || state.Windows[0].Title != "complete" {
+		t.Fatalf("complete prefix was not preserved: %#v", state.Windows)
 	}
 }
 

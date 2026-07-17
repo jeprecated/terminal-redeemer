@@ -1,6 +1,7 @@
 package prune
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,20 +68,68 @@ func TestAgeBasedPruningEventsAndSnapshots(t *testing.T) {
 	}
 }
 
-func TestPruneSafetyWithActiveLock(t *testing.T) {
+func TestPruneSafetyWithActiveWriter(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	writer, err := store.AcquireWriter()
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	runner := NewRunner(root, 30, time.Now)
+	if _, err := runner.Run(); !errors.Is(err, ErrActiveWriter) {
+		t.Fatalf("expected active writer error, got %v", err)
+	}
+}
+
+func TestPruneIgnoresStaleLockMarker(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "meta"), 0o755); err != nil {
 		t.Fatalf("make meta dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "meta", "lock"), []byte("1234"), 0o600); err != nil {
-		t.Fatalf("write lock file: %v", err)
+	if err := os.WriteFile(filepath.Join(root, "meta", "lock"), []byte("stale pid 1234"), 0o600); err != nil {
+		t.Fatalf("write stale lock file: %v", err)
 	}
 
 	runner := NewRunner(root, 30, time.Now)
-	if _, err := runner.Run(); err == nil {
-		t.Fatal("expected active lock error")
+	if _, err := runner.Run(); err != nil {
+		t.Fatalf("stale marker blocked prune: %v", err)
+	}
+}
+
+func TestPruneHoldsExclusionBeforeMutating(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := events.NewStore(root)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	checked := false
+	runner := NewRunner(root, 30, func() time.Time {
+		checked = true
+		writer, acquireErr := store.AcquireWriter()
+		if writer != nil {
+			_ = writer.Close()
+		}
+		if !errors.Is(acquireErr, events.ErrLocked) {
+			t.Fatalf("writer acquired during prune: %v", acquireErr)
+		}
+		return time.Now()
+	})
+	if _, err := runner.Run(); err != nil {
+		t.Fatalf("prune run: %v", err)
+	}
+	if !checked {
+		t.Fatal("expected prune callback to run")
 	}
 }
 

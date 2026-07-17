@@ -1,8 +1,6 @@
 package replay
 
 import (
-	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,16 +23,12 @@ func ListEvents(root string, from *time.Time, to *time.Time) ([]events.Event, er
 		_ = f.Close()
 	}()
 
-	out := make([]events.Event, 0)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if err := event.Validate(); err != nil {
-			continue
-		}
+	decoded, _, err := events.ReadLog(f)
+	if err != nil {
+		return nil, fmt.Errorf("read event log: %w", err)
+	}
+	out := make([]events.Event, 0, len(decoded))
+	for _, event := range decoded {
 		if from != nil && event.TS.Before(*from) {
 			continue
 		}
@@ -43,9 +37,5 @@ func ListEvents(root string, from *time.Time, to *time.Time) ([]events.Event, er
 		}
 		out = append(out, event)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
 	return out, nil
 }

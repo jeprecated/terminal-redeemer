@@ -21,7 +21,7 @@ func TestListEventsMissingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestListEventsSkipsInvalidLinesAndAppliesInclusiveBounds(t *testing.T) {
+func TestListEventsIgnoresInvalidTrailingLineAndAppliesInclusiveBounds(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()

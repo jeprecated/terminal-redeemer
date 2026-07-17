@@ -1,10 +1,10 @@
 package prune
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/storelock"
 )
 
 var ErrActiveWriter = errors.New("active writer lock present")
@@ -35,9 +36,14 @@ func NewRunner(root string, days int, now func() time.Time) *Runner {
 }
 
 func (r *Runner) Run() (Summary, error) {
-	if _, err := os.Stat(filepath.Join(r.root, "meta", "lock")); err == nil {
+	lock, err := storelock.Acquire(r.root)
+	if errors.Is(err, storelock.ErrLocked) {
 		return Summary{}, ErrActiveWriter
 	}
+	if err != nil {
+		return Summary{}, fmt.Errorf("acquire prune lock: %w", err)
+	}
+	defer func() { _ = lock.Close() }()
 
 	cutoff := r.now().UTC().AddDate(0, 0, -r.days)
 	eventsPruned, err := r.pruneEvents(cutoff)
@@ -65,17 +71,14 @@ func (r *Runner) pruneEvents(cutoff time.Time) (int, error) {
 		_ = f.Close()
 	}()
 
-	kept := make([]events.Event, 0)
+	decoded, _, err := events.ReadLog(f)
+	if err != nil {
+		return 0, fmt.Errorf("read events: %w", err)
+	}
+
+	kept := make([]events.Event, 0, len(decoded))
 	var anchor *events.Event
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if err := event.Validate(); err != nil {
-			continue
-		}
+	for _, event := range decoded {
 		if event.TS.Before(cutoff) {
 			e := event
 			anchor = &e
@@ -83,20 +86,15 @@ func (r *Runner) pruneEvents(cutoff time.Time) (int, error) {
 		}
 		kept = append(kept, event)
 	}
-	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("scan events: %w", err)
-	}
-
 	if anchor != nil {
 		kept = append([]events.Event{*anchor}, kept...)
 	}
 
-	originalCount := countValidEvents(filepath.Join(r.root, "events.jsonl"))
 	if err := rewriteEvents(eventsPath, kept); err != nil {
 		return 0, err
 	}
 
-	return max(0, originalCount-len(kept)), nil
+	return max(0, len(decoded)-len(kept)), nil
 }
 
 func (r *Runner) pruneSnapshots(cutoff time.Time) (int, error) {
@@ -151,54 +149,64 @@ func (r *Runner) pruneSnapshots(cutoff time.Time) (int, error) {
 		pruned++
 	}
 
+	if pruned > 0 {
+		if err := syncDir(dir); err != nil {
+			return 0, fmt.Errorf("sync snapshots dir: %w", err)
+		}
+	}
 	return pruned, nil
 }
 
-func rewriteEvents(path string, kept []events.Event) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+func rewriteEvents(path string, kept []events.Event) (err error) {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".events-*.tmp")
 	if err != nil {
 		return err
 	}
-	for _, event := range kept {
-		payload, err := json.Marshal(event)
+	tmp := f.Name()
+	defer func() {
+		_ = f.Close()
 		if err != nil {
-			_ = f.Close()
-			return err
+			_ = os.Remove(tmp)
 		}
-		if _, err := f.Write(append(payload, '\n')); err != nil {
-			_ = f.Close()
-			return err
+	}()
+
+	for _, event := range kept {
+		payload, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			return marshalErr
 		}
+		payload = append(payload, '\n')
+		written, writeErr := f.Write(payload)
+		if writeErr != nil {
+			return writeErr
+		}
+		if written != len(payload) {
+			return io.ErrShortWrite
+		}
+	}
+	if err := f.Sync(); err != nil {
+		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if err := syncDir(dir); err != nil {
+		return err
+	}
+	return nil
 }
 
-func countValidEvents(path string) int {
-	f, err := os.Open(path)
+func syncDir(path string) error {
+	dir, err := os.Open(path)
 	if err != nil {
-		return 0
+		return err
 	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	count := 0
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		if err := event.Validate(); err != nil {
-			continue
-		}
-		count++
-	}
-	return count
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
 }
 
 func max(a, b int) int {
