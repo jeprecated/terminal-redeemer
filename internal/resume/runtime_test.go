@@ -30,14 +30,20 @@ func TestSnapshotObserverPreservesExactNiriIdentity(t *testing.T) {
 
 func TestProcAttachmentProbeRequiresLiveExactAttachOnlyDescendant(t *testing.T) {
 	root := t.TempDir()
-	writeFakeProcess(t, root, 100, 1, []string{"kitty", "zellij", "attach", "target"})
-	writeFakeProcess(t, root, 101, 100, []string{"zellij", "attach", "target"})
-	writeFakeProcess(t, root, 102, 100, []string{"zellij", "attach", "target", "--create"})
+	writeFakeProcess(t, root, 100, 1, []string{"kitty", "zellij", "attach", "--", "target"})
+	writeFakeProcess(t, root, 101, 100, []string{"zellij", "attach", "--", "target"})
+	writeFakeProcess(t, root, 102, 100, []string{"zellij", "attach", "--", "target", "--create"})
+	writeFakeProcess(t, root, 103, 100, []string{"zellij", "attach", "target"})
+	writeFakeProcess(t, root, 104, 100, []string{"zellij", "attach", "--", "-leading"})
 	probe := ProcAttachmentProbe{ProcRoot: root}
 
 	attached, err := probe.Attached(context.Background(), 100, "target")
 	if err != nil || !attached {
 		t.Fatalf("exact attach descendant: attached=%v err=%v", attached, err)
+	}
+	attached, err = probe.Attached(context.Background(), 100, "-leading")
+	if err != nil || !attached {
+		t.Fatalf("leading-dash session: attached=%v err=%v", attached, err)
 	}
 	attached, err = probe.Attached(context.Background(), 100, "other")
 	if err != nil || attached {
@@ -49,7 +55,7 @@ func TestProcAttachmentProbeRequiresLiveExactAttachOnlyDescendant(t *testing.T) 
 	}
 	attached, err = probe.Attached(context.Background(), 100, "target")
 	if err != nil || attached {
-		t.Fatalf("Kitty argv or attach-or-create must not count as evidence: attached=%v err=%v", attached, err)
+		t.Fatalf("Kitty argv, legacy no-delimiter argv, extra args, or --create must not count as evidence: attached=%v err=%v", attached, err)
 	}
 }
 

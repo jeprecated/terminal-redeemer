@@ -100,11 +100,11 @@ The dry run is non-mutating: it reads complete checkpoints, current Niri workspa
 
 The newest prior-boot candidate is authoritative even when it is empty. `empty`, `stale`, and `not_found` candidate statuses are visible no-ops rather than reasons to select older history. Their output includes actionable guidance to use `redeem restore tui` or `redeem restore apply --at ...` for explicit forensic selection, including legacy records without boot IDs.
 
-Apply launches each Kitty process directly, with no outer shell, and passes exact attach-only argv: `zellij attach <session>`. Zellij environment variables are removed to avoid accidental nested-session behavior. Resume accepts a launch only when all required evidence is present:
+Apply launches each Kitty process directly, with no outer shell, and passes exact attach-only argv: `zellij attach -- <session>`. Zellij environment variables are removed to avoid accidental nested-session behavior. Resume accepts a launch only when all required evidence is present:
 
 1. the launched process supplies a positive PID;
 2. exactly one Niri window with that client PID appears before the configured timeout;
-3. a live descendant process has exact argv `zellij attach <session>`; and
+3. a live descendant process has exact argv `zellij attach -- <session>` on two consecutive polls while the launched Kitty process remains alive; and
 4. after the Niri move succeeds, the same window ID and PID is observed on the resolved runtime workspace.
 
 There is no app-ID, creation-order, or nearest-window fallback. A launcher that forks/daemonizes or a Kitty/Niri combination that does not preserve client PID identity is reported as `failed`. Correlation or attachment timeout kills the launched process so it cannot leak an unowned terminal. A failed required workspace move is also `failed`, but the successfully attached terminal is deliberately left open; a rerun detects it as `already_open` and does not create a duplicate.

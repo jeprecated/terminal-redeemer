@@ -266,6 +266,7 @@ func (e Executor) waitForAttachment(ctx context.Context, process Process, sessio
 	waitCtx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
 	var lastErr error
+	confirmations := 0
 	for {
 		select {
 		case err := <-process.Done():
@@ -275,8 +276,22 @@ func (e Executor) waitForAttachment(ctx context.Context, process Process, sessio
 		attached, err := e.Probe.Attached(waitCtx, process.PID(), session)
 		if err != nil {
 			lastErr = err
-		} else if attached {
-			return true, "", ""
+			confirmations = 0
+		} else if !attached {
+			confirmations = 0
+		} else {
+			// Evidence must remain true across two polls, and the owning launch
+			// process must still be alive after each observation. This prevents a
+			// transient attach child from being accepted while it is exiting.
+			select {
+			case err := <-process.Done():
+				return false, StatusUnavailable, processExitReason("zellij attach exited during attachment confirmation", err)
+			default:
+				confirmations++
+			}
+			if confirmations >= 2 {
+				return true, "", ""
+			}
 		}
 		if err := e.sleep(waitCtx); err != nil {
 			if lastErr != nil {
@@ -366,7 +381,7 @@ func KittyLaunchSpec(command string, item Item) LaunchSpec {
 	if cwd := strings.TrimSpace(item.CWD); cwd != "" {
 		args = append(args, "--directory", cwd)
 	}
-	args = append(args, "zellij", "attach", item.Session)
+	args = append(args, "zellij", "attach", "--", item.Session)
 	return LaunchSpec{Command: strings.TrimSpace(command), Args: args, Env: withoutZellijEnvironment(os.Environ())}
 }
 

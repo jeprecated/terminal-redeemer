@@ -59,7 +59,7 @@ func runtimeWindowID(key string) (int, error) {
 }
 
 // ProcAttachmentProbe requires a live descendant whose argv is exactly
-// zellij attach <session>. Seeing the launch command in Kitty's own argv is
+// zellij attach -- <session>. Seeing the launch command in Kitty's own argv is
 // deliberately insufficient evidence.
 type ProcAttachmentProbe struct {
 	ProcRoot string
@@ -87,7 +87,7 @@ func (p ProcAttachmentProbe) Attached(_ context.Context, rootPID int, session st
 		}
 		seen[pid] = struct{}{}
 		args, err := readProcArgs(root, pid)
-		if err == nil && len(args) == 3 && filepath.Base(args[0]) == "zellij" && args[1] == "attach" && args[2] == session {
+		if err == nil && len(args) == 4 && filepath.Base(args[0]) == "zellij" && args[1] == "attach" && args[2] == "--" && args[3] == session {
 			return true, nil
 		}
 		queue = append(queue, children[pid]...)

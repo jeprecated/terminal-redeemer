@@ -35,11 +35,12 @@ func (p *fakeProcess) killCount() int {
 }
 
 type fakeDesktop struct {
-	mu       sync.Mutex
-	windows  []ObservedWindow
-	attached map[int]string
-	moves    []string
-	moveErr  error
+	mu                  sync.Mutex
+	windows             []ObservedWindow
+	attached            map[int]string
+	moves               []string
+	moveErr             error
+	skipMoveObservation bool
 }
 
 func (d *fakeDesktop) Windows(context.Context) ([]ObservedWindow, error) {
@@ -58,6 +59,9 @@ func (d *fakeDesktop) MoveToWorkspace(_ context.Context, id int, target Workspac
 	d.moves = append(d.moves, target.ID)
 	if d.moveErr != nil {
 		return d.moveErr
+	}
+	if d.skipMoveObservation {
+		return nil
 	}
 	for i := range d.windows {
 		if d.windows[i].ID == id {
@@ -108,6 +112,42 @@ type fakeLayout struct{ result LayoutResult }
 
 func (l fakeLayout) ApplyLayout(context.Context, int, model.Placement) LayoutResult { return l.result }
 
+type probeObservation struct {
+	attached bool
+	err      error
+}
+
+type sequenceProbe struct {
+	mu           sync.Mutex
+	observations []probeObservation
+	calls        int
+}
+
+func (p *sequenceProbe) Attached(context.Context, int, string) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	index := p.calls
+	p.calls++
+	if index >= len(p.observations) {
+		return false, nil
+	}
+	observation := p.observations[index]
+	return observation.attached, observation.err
+}
+
+type exitDuringConfirmationProbe struct {
+	launcher *fakeLauncher
+	calls    int
+}
+
+func (p *exitDuringConfirmationProbe) Attached(context.Context, int, string) (bool, error) {
+	p.calls++
+	if p.calls == 2 {
+		p.launcher.processes[0].done <- errors.New("attach exited")
+	}
+	return true, nil
+}
+
 func testExecutor(desktop *fakeDesktop, launcher *fakeLauncher) Executor {
 	return Executor{
 		Config:   ExecutorConfig{LauncherCommand: "/usr/bin/kitty", Timeout: 10 * time.Millisecond, PollInterval: time.Millisecond},
@@ -145,7 +185,7 @@ func TestExecutorRestoresMultipleSessionsByExactPIDAndRerunIsIdempotent(t *testi
 	}
 	for i, spec := range launcher.specs {
 		wantSession := "session-" + string(rune('a'+i))
-		want := []string{"--directory", "/tmp/" + wantSession, "zellij", "attach", wantSession}
+		want := []string{"--directory", "/tmp/" + wantSession, "zellij", "attach", "--", wantSession}
 		if strings.Join(spec.Args, "\x00") != strings.Join(want, "\x00") {
 			t.Fatalf("launch argv = %#v, want %#v", spec.Args, want)
 		}
@@ -168,11 +208,26 @@ func TestExecutorRestoresMultipleSessionsByExactPIDAndRerunIsIdempotent(t *testi
 	}
 }
 
-func TestKittyLaunchSpecKeepsSessionAndCWDAsArgv(t *testing.T) {
-	spec := KittyLaunchSpec("kitty", Item{CWD: "/tmp/a b", Session: "name; touch /tmp/owned"})
-	want := []string{"--directory", "/tmp/a b", "zellij", "attach", "name; touch /tmp/owned"}
+func TestKittyLaunchSpecKeepsLeadingDashSessionAndCWDAsArgv(t *testing.T) {
+	spec := KittyLaunchSpec("kitty", Item{CWD: "/tmp/a b", Session: "-name; touch /tmp/owned"})
+	want := []string{"--directory", "/tmp/a b", "zellij", "attach", "--", "-name; touch /tmp/owned"}
 	if !reflect.DeepEqual(spec.Args, want) {
 		t.Fatalf("argv = %#v, want %#v", spec.Args, want)
+	}
+}
+
+func TestExecutorRejectsAmbiguousSamePIDNiriMatches(t *testing.T) {
+	desktop := &fakeDesktop{
+		windows:  []ObservedWindow{{ID: 99, PID: 1001, AppID: "kitty", WorkspaceID: "other"}},
+		attached: map[int]string{},
+	}
+	launcher := &fakeLauncher{desktop: desktop}
+	got := testExecutor(desktop, launcher).Apply(context.Background(), Plan{Items: []Item{readyItem("a", "session", "ws")}})
+	if got.Items[0].Status != StatusFailed || !strings.Contains(got.Items[0].Reason, "correlation is ambiguous") {
+		t.Fatalf("result = %#v", got.Items[0])
+	}
+	if launcher.processes[0].killCount() != 1 || len(desktop.moves) != 0 {
+		t.Fatalf("ambiguous launch cleanup/moves: kills=%d moves=%#v", launcher.processes[0].killCount(), desktop.moves)
 	}
 }
 
@@ -200,6 +255,46 @@ func TestExecutorAttachmentEvidenceTimeoutKillsLaunchedProcess(t *testing.T) {
 	}
 }
 
+func TestExecutorTransientAttachmentEvidenceCannotRestore(t *testing.T) {
+	tests := []struct {
+		name         string
+		observations []probeObservation
+	}{
+		{name: "disappearing descendant resets confirmation", observations: []probeObservation{{attached: true}, {attached: false}, {attached: true}}},
+		{name: "probe error resets confirmation", observations: []probeObservation{{attached: true}, {err: errors.New("attach descendant exited")}, {attached: true}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desktop := &fakeDesktop{attached: map[int]string{}}
+			launcher := &fakeLauncher{desktop: desktop, noAttach: true}
+			probe := &sequenceProbe{observations: tt.observations}
+			executor := testExecutor(desktop, launcher)
+			executor.Probe = probe
+			got := executor.Apply(context.Background(), Plan{Items: []Item{readyItem("a", "session", "ws")}})
+			if got.Items[0].Status == StatusRestored || got.Items[0].Status != StatusFailed {
+				t.Fatalf("transient evidence result = %#v", got.Items[0])
+			}
+			if len(desktop.moves) != 0 || launcher.processes[0].killCount() != 1 {
+				t.Fatalf("transient evidence moved or leaked: moves=%#v kills=%d", desktop.moves, launcher.processes[0].killCount())
+			}
+		})
+	}
+}
+
+func TestExecutorLaunchMustRemainAliveThroughSecondAttachmentPoll(t *testing.T) {
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop, noAttach: true}
+	executor := testExecutor(desktop, launcher)
+	executor.Probe = &exitDuringConfirmationProbe{launcher: launcher}
+	got := executor.Apply(context.Background(), Plan{Items: []Item{readyItem("a", "session", "ws")}})
+	if got.Items[0].Status != StatusUnavailable || got.Items[0].Status == StatusRestored {
+		t.Fatalf("exited confirmation result = %#v", got.Items[0])
+	}
+	if len(desktop.moves) != 0 || launcher.processes[0].killCount() != 1 {
+		t.Fatalf("exited confirmation moved or leaked: moves=%#v kills=%d", desktop.moves, launcher.processes[0].killCount())
+	}
+}
+
 func TestExecutorFailedAttachExitIsUnavailableAndCleanedUp(t *testing.T) {
 	desktop := &fakeDesktop{attached: map[int]string{}}
 	launcher := &fakeLauncher{desktop: desktop, noWindow: true, exitSet: true, exit: errors.New("exit status 1")}
@@ -209,6 +304,18 @@ func TestExecutorFailedAttachExitIsUnavailableAndCleanedUp(t *testing.T) {
 	}
 	if launcher.processes[0].killCount() != 1 {
 		t.Fatalf("failed attach cleanup kills = %d", launcher.processes[0].killCount())
+	}
+}
+
+func TestExecutorSuccessfulMoveMustBeObserved(t *testing.T) {
+	desktop := &fakeDesktop{attached: map[int]string{}, skipMoveObservation: true}
+	launcher := &fakeLauncher{desktop: desktop}
+	got := testExecutor(desktop, launcher).Apply(context.Background(), Plan{Items: []Item{readyItem("a", "session", "ws")}})
+	if got.Items[0].Status != StatusFailed || !strings.Contains(got.Items[0].Reason, "movement was not observed") || !strings.Contains(got.Items[0].Reason, "left open") {
+		t.Fatalf("result = %#v", got.Items[0])
+	}
+	if len(desktop.moves) != 1 || launcher.processes[0].killCount() != 0 {
+		t.Fatalf("unobserved move behavior: moves=%#v kills=%d", desktop.moves, launcher.processes[0].killCount())
 	}
 }
 
@@ -248,6 +355,36 @@ func TestExecutorRejectsLauncherWithoutCorrelationPID(t *testing.T) {
 	}
 	if launcher.processes[0].killCount() != 1 {
 		t.Fatal("unsupported launcher process was not cleaned up")
+	}
+}
+
+func TestExecutorDegradedItemAttachesWithoutClaimingRestored(t *testing.T) {
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	item := readyItem("a", "session", "")
+	item.Status = StatusDegraded
+	item.Workspace = nil
+	item.Reason = "workspace target unresolved; leave window on current workspace"
+	got := testExecutor(desktop, launcher).Apply(context.Background(), Plan{Items: []Item{item}})
+	if got.Items[0].Status != StatusDegraded || got.Summary.Degraded != 1 || got.Summary.Restored != 0 {
+		t.Fatalf("result = %#v", got)
+	}
+	if len(desktop.moves) != 0 || launcher.processes[0].killCount() != 0 {
+		t.Fatalf("degraded behavior: moves=%#v kills=%d", desktop.moves, launcher.processes[0].killCount())
+	}
+}
+
+func TestExecutorReadyItemWithoutWorkspaceFailsAndCleansUp(t *testing.T) {
+	desktop := &fakeDesktop{attached: map[int]string{}}
+	launcher := &fakeLauncher{desktop: desktop}
+	item := readyItem("a", "session", "")
+	item.Workspace = nil
+	got := testExecutor(desktop, launcher).Apply(context.Background(), Plan{Items: []Item{item}})
+	if got.Items[0].Status != StatusFailed || !strings.Contains(got.Items[0].Reason, "no resolved workspace") {
+		t.Fatalf("result = %#v", got.Items[0])
+	}
+	if len(desktop.moves) != 0 || launcher.processes[0].killCount() != 1 {
+		t.Fatalf("missing workspace behavior: moves=%#v kills=%d", desktop.moves, launcher.processes[0].killCount())
 	}
 }
 
