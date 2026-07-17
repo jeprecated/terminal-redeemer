@@ -31,6 +31,31 @@ func TestCollectFromFixtureAndEnrich(t *testing.T) {
 	}
 }
 
+func TestCollectRetainsPlacementWhenTerminalIsEnriched(t *testing.T) {
+	t.Parallel()
+
+	snapshotter := stubSnapshotter{raw: []byte(`{
+  "workspaces": [{"id": 7, "idx": 2, "name": null, "output": "DP-1"}],
+  "windows": [{"id": 101, "app_id": "kitty", "title": "shell", "workspace_id": 7, "pid": 4242, "is_floating": false, "layout": {"pos_in_scrolling_layout": [4, 1], "tile_size": [900, 700]}}]
+}`)}
+	c := New(snapshotter, metadataEnricher{})
+	state, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	window := state.Windows[0]
+	if window.Terminal == nil || window.Terminal.SessionTag != "verified-session" || window.Terminal.CWD != "/work/project" {
+		t.Fatalf("verified terminal metadata missing: %#v", window.Terminal)
+	}
+	if window.WorkspaceRef == nil || window.WorkspaceRef.Output != "DP-1" || window.WorkspaceRef.Index != 2 {
+		t.Fatalf("durable workspace metadata missing: %#v", window.WorkspaceRef)
+	}
+	if window.Placement == nil || window.Placement.Column == nil || *window.Placement.Column != 4 || window.Placement.IsFloating == nil || *window.Placement.IsFloating {
+		t.Fatalf("placement metadata missing: %#v", window.Placement)
+	}
+}
+
 func TestCollectGracefullyDegradesOnMetadataError(t *testing.T) {
 	t.Parallel()
 
@@ -52,6 +77,13 @@ func TestCollectGracefullyDegradesOnMetadataError(t *testing.T) {
 	if state.Windows[0].Terminal != nil {
 		t.Fatalf("expected no terminal metadata due to degraded mode, got %#v", state.Windows[0].Terminal)
 	}
+}
+
+type metadataEnricher struct{}
+
+func (metadataEnricher) EnrichWindow(window model.Window) (model.Window, error) {
+	window.Terminal = &model.Terminal{CWD: "/work/project", SessionTag: "verified-session"}
+	return window, nil
 }
 
 type stubSnapshotter struct {

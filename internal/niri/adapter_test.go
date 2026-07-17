@@ -1,6 +1,11 @@
 package niri
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/jmo/terminal-redeemer/internal/model"
+)
 
 func TestParseSnapshotFixture(t *testing.T) {
 	t.Parallel()
@@ -59,6 +64,60 @@ func TestParseSnapshotWindowsArray(t *testing.T) {
 	}
 	if state.Windows[0].WorkspaceID == "" || state.Windows[1].WorkspaceID == "" {
 		t.Fatalf("expected workspace ids normalized to strings, got %#v", state.Windows)
+	}
+}
+
+func TestParseSnapshotCapturesDurableWorkspaceAndOptionalPlacementFixture(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/placement.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	state, err := ParseSnapshot(raw)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+
+	if got := state.Workspaces[0]; got.Name != "work" || got.Index != 1 || got.Output != "DP-1" || got.ID != "10" {
+		t.Fatalf("named workspace metadata lost: %#v", got)
+	}
+	if got := state.Workspaces[1]; got.Name != "" || got.Index != 2 || got.Output != "HDMI-A-1" || got.ID != "20" {
+		t.Fatalf("unnamed workspace metadata lost: %#v", got)
+	}
+
+	byTitle := make(map[string]model.Window, len(state.Windows))
+	for _, window := range state.Windows {
+		byTitle[window.Title] = window
+	}
+	named := byTitle["named"]
+	if named.WorkspaceID != "10" || named.WorkspaceRef == nil {
+		t.Fatalf("workspace evidence/reference missing: %#v", named)
+	}
+	if ref := *named.WorkspaceRef; ref.Name != "work" || ref.Output != "DP-1" || ref.Index != 1 {
+		t.Fatalf("durable named workspace reference = %#v", ref)
+	}
+	if named.Placement == nil || named.Placement.Column == nil || *named.Placement.Column != 3 {
+		t.Fatalf("column placement missing: %#v", named.Placement)
+	}
+	if named.Placement.IsFloating == nil || *named.Placement.IsFloating {
+		t.Fatalf("observed false floating state missing: %#v", named.Placement)
+	}
+	if len(named.Placement.TileSize) != 2 || named.Placement.TileSize[0] != 800.5 || len(named.Placement.WindowSize) != 2 {
+		t.Fatalf("tile dimensions missing: %#v", named.Placement)
+	}
+
+	unnamed := byTitle["unnamed"]
+	if unnamed.WorkspaceRef == nil || unnamed.WorkspaceRef.Name != "" || unnamed.WorkspaceRef.Output != "HDMI-A-1" || unnamed.WorkspaceRef.Index != 2 {
+		t.Fatalf("unnamed durable reference missing output/index: %#v", unnamed.WorkspaceRef)
+	}
+	if unnamed.Placement == nil || unnamed.Placement.IsFloating == nil || !*unnamed.Placement.IsFloating || unnamed.Placement.Column != nil {
+		t.Fatalf("optional floating placement not preserved: %#v", unnamed.Placement)
+	}
+
+	legacy := byTitle["legacy-fields-absent"]
+	if legacy.Placement != nil {
+		t.Fatalf("absent optional layout should remain omitted: %#v", legacy.Placement)
 	}
 }
 

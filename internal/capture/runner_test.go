@@ -12,6 +12,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/diff"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/model"
+	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
@@ -124,6 +125,65 @@ func TestCaptureRunLoopsAndContinuesOnRecoverableErrors(t *testing.T) {
 	}
 	if !bytes.Contains(logs.Bytes(), []byte("capture_once_error")) {
 		t.Fatalf("expected recoverable error log, got %q", logs.String())
+	}
+}
+
+func TestWorkspaceOnlyChangePersistsThroughEventsSnapshotAndReplay(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bootSource := func() (string, error) { return "boot-placement", nil }
+	eventStore, err := events.NewStoreWithBootIDSource(root, bootSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapStore, err := snapshots.NewStoreWithBootIDSource(root, bootSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateA := model.State{
+		Workspaces: []model.Workspace{{ID: "runtime-8", Index: 2, Output: "DP-1"}},
+		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "runtime-8", WorkspaceRef: &model.WorkspaceRef{Index: 2, Output: "DP-1"}}},
+	}
+	stateB := model.Normalize(stateA)
+	stateB.Workspaces[0].Name = "work"
+	stateB.Windows[0].WorkspaceRef.Name = "work"
+	capturedAt := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	runner := NewRunner(Config{
+		Collector: &sequenceCollector{states: []model.State{stateA, stateB}}, DiffEngine: diff.NewEngine(),
+		EventStore: eventStore, SnapshotStore: snapStore, SnapshotEvery: 2,
+		Host: "host-a", Profile: "default", Source: "test", Now: func() time.Time { return capturedAt },
+	})
+
+	if _, err := runner.captureDiff(context.Background()); err != nil {
+		t.Fatalf("capture initial state: %v", err)
+	}
+	result, err := runner.captureDiff(context.Background())
+	if err != nil {
+		t.Fatalf("capture workspace-only change: %v", err)
+	}
+	if result.EventsWritten != 1 || result.SnapshotPath == "" {
+		t.Fatalf("workspace-only result = %#v", result)
+	}
+	recorded, _, err := eventStore.ReadSince(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded) != 2 || recorded[1].EventType != "state_full" {
+		t.Fatalf("workspace-only event missing: %#v", recorded)
+	}
+
+	replayEngine, err := replay.NewEngine(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := replayEngine.At(capturedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Workspaces[0].Name != "work" || replayed.Windows[0].WorkspaceRef == nil || replayed.Windows[0].WorkspaceRef.Name != "work" {
+		t.Fatalf("workspace-only metadata lost during replay: %#v", replayed)
 	}
 }
 

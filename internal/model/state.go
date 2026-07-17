@@ -13,18 +13,38 @@ type State struct {
 }
 
 type Workspace struct {
-	ID    string `json:"id"`
-	Index int    `json:"index"`
-	Name  string `json:"name,omitempty"`
+	ID     string `json:"id"`
+	Index  int    `json:"index"`
+	Name   string `json:"name,omitempty"`
+	Output string `json:"output,omitempty"`
 }
 
 type Window struct {
-	Key         string    `json:"key"`
-	AppID       string    `json:"app_id"`
-	WorkspaceID string    `json:"workspace_id"`
-	PID         int       `json:"pid,omitempty"`
-	Title       string    `json:"title,omitempty"`
-	Terminal    *Terminal `json:"terminal,omitempty"`
+	Key          string        `json:"key"`
+	AppID        string        `json:"app_id"`
+	WorkspaceID  string        `json:"workspace_id"`
+	WorkspaceRef *WorkspaceRef `json:"workspace_ref,omitempty"`
+	PID          int           `json:"pid,omitempty"`
+	Title        string        `json:"title,omitempty"`
+	Placement    *Placement    `json:"placement,omitempty"`
+	Terminal     *Terminal     `json:"terminal,omitempty"`
+}
+
+// WorkspaceRef contains only cross-boot workspace selectors. WorkspaceID is
+// retained separately on Window as historical/current-runtime evidence.
+type WorkspaceRef struct {
+	Name   string `json:"name,omitempty"`
+	Output string `json:"output,omitempty"`
+	Index  int    `json:"index,omitempty"`
+}
+
+// Placement is best-effort Niri layout evidence. Pointer scalars distinguish
+// an observed zero/false value from a field absent in older Niri payloads.
+type Placement struct {
+	Column     *int      `json:"column,omitempty"`
+	IsFloating *bool     `json:"is_floating,omitempty"`
+	TileSize   []float64 `json:"tile_size,omitempty"`
+	WindowSize []int     `json:"window_size,omitempty"`
 }
 
 type Terminal struct {
@@ -51,15 +71,32 @@ func Normalize(s State) State {
 	})
 
 	for i := range out.Windows {
-		if out.Windows[i].Terminal == nil {
-			continue
+		if out.Windows[i].WorkspaceRef != nil {
+			ref := *out.Windows[i].WorkspaceRef
+			out.Windows[i].WorkspaceRef = &ref
 		}
-		term := *out.Windows[i].Terminal
-		if len(term.ProcessTags) > 0 {
-			term.ProcessTags = append([]string(nil), term.ProcessTags...)
-			sort.Strings(term.ProcessTags)
+		if out.Windows[i].Placement != nil {
+			placement := *out.Windows[i].Placement
+			if placement.Column != nil {
+				column := *placement.Column
+				placement.Column = &column
+			}
+			if placement.IsFloating != nil {
+				floating := *placement.IsFloating
+				placement.IsFloating = &floating
+			}
+			placement.TileSize = append([]float64(nil), placement.TileSize...)
+			placement.WindowSize = append([]int(nil), placement.WindowSize...)
+			out.Windows[i].Placement = &placement
 		}
-		out.Windows[i].Terminal = &term
+		if out.Windows[i].Terminal != nil {
+			term := *out.Windows[i].Terminal
+			if len(term.ProcessTags) > 0 {
+				term.ProcessTags = append([]string(nil), term.ProcessTags...)
+				sort.Strings(term.ProcessTags)
+			}
+			out.Windows[i].Terminal = &term
+		}
 	}
 
 	return out

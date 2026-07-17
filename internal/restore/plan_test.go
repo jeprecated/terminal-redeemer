@@ -158,6 +158,23 @@ func TestPlannerUsesWorkspaceNameThenIndexForWorkspaceReference(t *testing.T) {
 	}
 }
 
+func TestPlannerPrefersPerWindowDurableReferenceOverRuntimeID(t *testing.T) {
+	t.Parallel()
+
+	state := model.State{Windows: []model.Window{
+		{Key: "w-named", AppID: "code", WorkspaceID: "runtime-98", WorkspaceRef: &model.WorkspaceRef{Name: "work", Output: "DP-1", Index: 3}},
+		{Key: "w-unnamed", AppID: "code", WorkspaceID: "runtime-99", WorkspaceRef: &model.WorkspaceRef{Output: "HDMI-A-1", Index: 4}},
+	}}
+	plan := NewPlanner(PlannerConfig{AppAllowlist: map[string]string{"code": "code"}}).Build(state)
+
+	if got := workspaceOf(plan, "w-named"); got != "work" {
+		t.Fatalf("named durable selector = %q", got)
+	}
+	if got := workspaceOf(plan, "w-unnamed"); got != "4" {
+		t.Fatalf("unnamed durable index selector = %q", got)
+	}
+}
+
 func TestPlannerInfersDenseWorkspaceIndexesFromNumericWindowWorkspaceIDs(t *testing.T) {
 	t.Parallel()
 

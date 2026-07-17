@@ -136,11 +136,17 @@ func applyWindowPatch(windows map[string]model.Window, key string, patch map[str
 	if workspaceID, ok := patch["workspace_id"].(string); ok {
 		window.WorkspaceID = workspaceID
 	}
+	if workspaceRefRaw, ok := patch["workspace_ref"]; ok {
+		window.WorkspaceRef = decodePointer[model.WorkspaceRef](workspaceRefRaw)
+	}
 	if title, ok := patch["title"].(string); ok {
 		window.Title = title
 	}
-	if pid, ok := patch["pid"].(float64); ok {
-		window.PID = int(pid)
+	if pid, ok := numericInt(patch["pid"]); ok {
+		window.PID = pid
+	}
+	if placementRaw, ok := patch["placement"]; ok {
+		window.Placement = decodePointer[model.Placement](placementRaw)
 	}
 	if terminalRaw, ok := patch["terminal"]; ok {
 		if terminalRaw == nil {
@@ -151,6 +157,35 @@ func applyWindowPatch(windows map[string]model.Window, key string, patch map[str
 	}
 
 	windows[key] = window
+}
+
+func decodePointer[T any](raw any) *T {
+	if raw == nil {
+		return nil
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var value T
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil
+	}
+	return &value
+}
+
+func numericInt(raw any) (int, bool) {
+	switch value := raw.(type) {
+	case int:
+		return value, true
+	case float64:
+		return int(value), true
+	case json.Number:
+		parsed, err := value.Int64()
+		return int(parsed), err == nil
+	default:
+		return 0, false
+	}
 }
 
 func decodeTerminal(raw any) *model.Terminal {

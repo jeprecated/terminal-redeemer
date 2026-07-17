@@ -187,17 +187,23 @@ func (r *Runner) captureDiff(ctx context.Context) (Result, error) {
 
 	var lastOffset int64
 	for _, patch := range patches {
-		lastOffset, err = writer.Append(events.Event{
+		event := events.Event{
 			V:         1,
 			TS:        now,
 			Host:      r.host,
 			Profile:   r.profile,
-			EventType: "window_patch",
-			WindowKey: patch.WindowKey,
-			Patch:     patch.Fields,
 			Source:    r.source,
 			StateHash: stateHash,
-		})
+		}
+		if patch.State != nil {
+			event.EventType = "state_full"
+			event.State = stateAsMap(*patch.State)
+		} else {
+			event.EventType = "window_patch"
+			event.WindowKey = patch.WindowKey
+			event.Patch = patch.Fields
+		}
+		lastOffset, err = writer.Append(event)
 		if err != nil {
 			return Result{}, err
 		}

@@ -75,6 +75,63 @@ func TestReplayWithSnapshotAndTail(t *testing.T) {
 	if len(state.Windows) != 1 || state.Windows[0].Title != "b" {
 		t.Fatalf("expected title b from tail replay, got %#v", state.Windows)
 	}
+	if state.Windows[0].WorkspaceRef != nil || state.Windows[0].Placement != nil {
+		t.Fatalf("legacy snapshot should decode with additive fields absent: %#v", state.Windows[0])
+	}
+}
+
+func TestReplayPlacementOnlyPatchRetainsDurableWorkspaceAndTerminal(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	eventStore, err := events.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := eventStore.AcquireWriter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	t0 := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
+	state := map[string]any{
+		"workspaces": []any{map[string]any{"id": "runtime-9", "index": 3, "name": "terminals", "output": "DP-1"}},
+		"windows": []any{map[string]any{
+			"key": "w-1", "app_id": "kitty", "workspace_id": "runtime-9",
+			"workspace_ref": map[string]any{"name": "terminals", "output": "DP-1", "index": 3},
+			"placement":     map[string]any{"column": 1, "is_floating": false},
+			"terminal":      map[string]any{"cwd": "/work", "session_tag": "verified-session"},
+		}},
+	}
+	if _, err := writer.Append(events.Event{V: 1, TS: t0, Host: "host-a", Profile: "default", EventType: "state_full", State: state, StateHash: "sha256:a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Append(events.Event{
+		V: 1, TS: t0.Add(time.Second), Host: "host-a", Profile: "default", EventType: "window_patch", WindowKey: "w-1",
+		Patch: map[string]any{"placement": map[string]any{"column": 4, "is_floating": true, "tile_size": []any{900, 700}, "window_size": []any{880, 680}}}, StateHash: "sha256:b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	engine, err := NewEngine(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := engine.At(t0.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := replayed.Windows[0]
+	if window.WorkspaceRef == nil || window.WorkspaceRef.Name != "terminals" || window.WorkspaceID != "runtime-9" {
+		t.Fatalf("durable/runtime workspace evidence lost: %#v", window)
+	}
+	if window.Terminal == nil || window.Terminal.SessionTag != "verified-session" || window.Terminal.CWD != "/work" {
+		t.Fatalf("terminal identity lost: %#v", window.Terminal)
+	}
+	if window.Placement == nil || window.Placement.Column == nil || *window.Placement.Column != 4 || window.Placement.IsFloating == nil || !*window.Placement.IsFloating || len(window.Placement.TileSize) != 2 {
+		t.Fatalf("placement patch lost: %#v", window.Placement)
+	}
 }
 
 func TestReplayRejectsCorruptionBeforeACompleteLaterEvent(t *testing.T) {

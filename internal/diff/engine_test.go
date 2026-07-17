@@ -63,6 +63,49 @@ func TestSingleFieldChangeEmitsSparsePatch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceOnlyChangeEmitsFullStatePatch(t *testing.T) {
+	t.Parallel()
+
+	before := model.State{Workspaces: []model.Workspace{{ID: "runtime-1", Index: 1, Output: "DP-1"}}}
+	after := model.State{Workspaces: []model.Workspace{{ID: "runtime-1", Index: 1, Name: "work", Output: "DP-1"}}}
+
+	patches, changed, err := NewEngine().Diff(before, after)
+	if err != nil {
+		t.Fatalf("diff workspace metadata: %v", err)
+	}
+	if !changed || len(patches) != 1 || patches[0].State == nil {
+		t.Fatalf("workspace-only change was not represented: changed=%v patches=%#v", changed, patches)
+	}
+	if patches[0].State.Workspaces[0].Name != "work" {
+		t.Fatalf("full-state patch lost workspace metadata: %#v", patches[0].State)
+	}
+}
+
+func TestPlacementOnlyChangeEmitsSparseWindowPatch(t *testing.T) {
+	t.Parallel()
+
+	columnA, columnB := 1, 2
+	floating := false
+	beforeWindow := model.Window{Key: "w-1", AppID: "kitty", WorkspaceID: "runtime-1", Placement: &model.Placement{Column: &columnA, IsFloating: &floating}}
+	afterWindow := beforeWindow
+	afterWindow.Placement = &model.Placement{Column: &columnB, IsFloating: &floating, TileSize: []float64{900, 700}}
+	workspace := []model.Workspace{{ID: "runtime-1", Index: 1, Name: "work", Output: "DP-1"}}
+
+	patches, changed, err := NewEngine().Diff(
+		model.State{Workspaces: workspace, Windows: []model.Window{beforeWindow}},
+		model.State{Workspaces: workspace, Windows: []model.Window{afterWindow}},
+	)
+	if err != nil {
+		t.Fatalf("diff placement: %v", err)
+	}
+	if !changed || len(patches) != 1 || patches[0].State != nil {
+		t.Fatalf("placement-only change was not sparse: changed=%v patches=%#v", changed, patches)
+	}
+	if len(patches[0].Fields) != 1 || patches[0].Fields["placement"] == nil {
+		t.Fatalf("unexpected placement patch: %#v", patches[0].Fields)
+	}
+}
+
 func TestOptionalFieldAddRemoveBehavior(t *testing.T) {
 	t.Parallel()
 

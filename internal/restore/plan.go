@@ -81,7 +81,11 @@ func (p *Planner) Build(state model.State) Plan {
 	oneshootSeen := make(map[string]bool)
 	for _, window := range state.Windows {
 		resolvedWindow := window
-		if ref, ok := workspaceRefs[strings.TrimSpace(window.WorkspaceID)]; ok {
+		if ref := durableWorkspaceSelector(window.WorkspaceRef); ref != "" {
+			resolvedWindow.WorkspaceID = ref
+		} else if ref, ok := workspaceRefs[strings.TrimSpace(window.WorkspaceID)]; ok {
+			// Legacy captures have no per-window durable reference. Resolve
+			// their runtime ID through the workspace metadata when available.
 			resolvedWindow.WorkspaceID = ref
 		}
 		if strings.TrimSpace(resolvedWindow.WorkspaceID) == "" {
@@ -108,6 +112,19 @@ func (p *Planner) Build(state model.State) Plan {
 		plan.Items = append(plan.Items, item)
 	}
 	return plan
+}
+
+func durableWorkspaceSelector(ref *model.WorkspaceRef) string {
+	if ref == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(ref.Name); name != "" {
+		return name
+	}
+	if ref.Index > 0 {
+		return strconv.Itoa(ref.Index)
+	}
+	return ""
 }
 
 func workspaceRefsByID(state model.State) map[string]string {

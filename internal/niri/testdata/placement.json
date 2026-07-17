@@ -1,0 +1,39 @@
+{
+  "workspaces": [
+    {"id": 10, "idx": 1, "name": "work", "output": "DP-1"},
+    {"id": 20, "idx": 2, "name": null, "output": "HDMI-A-1"}
+  ],
+  "windows": [
+    {
+      "id": 101,
+      "app_id": "kitty",
+      "title": "named",
+      "workspace_id": 10,
+      "pid": 4101,
+      "is_floating": false,
+      "layout": {
+        "pos_in_scrolling_layout": [3, 1],
+        "tile_size": [800.5, 600],
+        "window_size": [790, 590]
+      }
+    },
+    {
+      "id": 102,
+      "app_id": "kitty",
+      "title": "unnamed",
+      "workspace_id": 20,
+      "pid": 4102,
+      "is_floating": true,
+      "layout": {
+        "tile_size": [640, 480]
+      }
+    },
+    {
+      "id": 103,
+      "app_id": "firefox",
+      "title": "legacy-fields-absent",
+      "workspace_id": 20,
+      "pid": 4103
+    }
+  ]
+}
