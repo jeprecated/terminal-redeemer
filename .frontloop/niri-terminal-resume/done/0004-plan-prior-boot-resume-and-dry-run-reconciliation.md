@@ -28,3 +28,30 @@ Add the boot-aware, terminal-only resume selection and planning layer, including
 ## Implementation Notes
 
 Primary areas: cmd/redeem, internal/config, internal/replay, internal/restore, internal/procmeta, and TUI/history compatibility tests. Keep the planner independently testable from Niri and Zellij processes. ADR: docs/adr/0001-resume-zellij-terminals-in-niri.md.
+
+
+## Completion Summary
+
+- Added boot-aware selection of the newest complete checkpoint from a prior boot, excluding current-boot and legacy bootless records.
+- Preserved newer empty/stale candidates without fallback and added explicit forensic restore guidance.
+- Added pure terminal reconciliation for already-open, duplicate, unavailable, degraded, stale, failed, and ready items.
+- Resolved workspace targets by name, output plus index, then index, with configurable current/skip/fail behavior and a safe degraded default.
+- Added a non-mutating `redeem resume --dry-run` path with structured candidate/item/summary output and configurable 24-hour age policy.
+- Passed independent Opus ACCEPT/re-ACCEPT, parent `go test ./...` (204 tests), and parent `nix flake check 'path:.'`.
+
+### Files Changed
+
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- docs/CONFIG.md
+- docs/OPERATIONS.md
+- flake.nix
+- internal/config/config.go
+- internal/config/config_test.go
+- internal/procmeta/session_verifier.go
+- internal/procmeta/session_verifier_test.go
+- internal/replay/checkpoints_test.go
+- internal/replay/history.go
+- internal/resume/planner.go
+- internal/resume/planner_test.go
+- modules/home-manager/terminal-redeemer.nix
