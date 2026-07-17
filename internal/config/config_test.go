@@ -43,7 +43,7 @@ func TestLoadMissingDefaultPathUsesDefaults(t *testing.T) {
 	if cfg.Restore.WorkspaceReconcileDelay <= 0 {
 		t.Fatalf("expected positive workspace reconcile delay, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
-	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "skip" {
+	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" {
 		t.Fatalf("unexpected safe resume defaults: %#v", cfg.Restore)
 	}
 }

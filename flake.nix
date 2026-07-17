@@ -181,7 +181,7 @@
           in
           assert rendered.capture.interval == "60s";
           assert rendered.restore.maxCheckpointAge == "24h";
-          assert rendered.restore.unresolvedWorkspace == "skip";
+          assert rendered.restore.unresolvedWorkspace == "current";
           assert captureTimer.Timer.OnActiveSec == "60s";
           assert captureTimer.Timer.OnUnitActiveSec == "60s";
           assert !(captureTimer.Timer ? Persistent);

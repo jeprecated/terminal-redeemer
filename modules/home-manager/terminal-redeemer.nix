@@ -179,7 +179,7 @@ in {
 
     restore.unresolvedWorkspace = lib.mkOption {
       type = lib.types.enum [ "skip" "current" "fail" ];
-      default = "skip";
+      default = "current";
       description = "Policy when a captured workspace cannot be resolved in current Niri state.";
     };
 

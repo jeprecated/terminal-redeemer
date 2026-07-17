@@ -542,7 +542,7 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	stateDir := fs.String("state-dir", resolvedConfig.StateDir, "state directory")
 	dryRun := fs.Bool("dry-run", false, "plan prior-boot terminal reconciliation without mutating")
 	maxAge := fs.Duration("max-age", resolvedConfig.Restore.MaxCheckpointAge, "maximum checkpoint age")
-	unresolved := fs.String("unresolved-workspace", resolvedConfig.Restore.UnresolvedWorkspace, "unresolved workspace policy: skip, current, or fail")
+	unresolved := fs.String("unresolved-workspace", resolvedConfig.Restore.UnresolvedWorkspace, "unresolved workspace policy: current, skip, or fail")
 	fixture := fs.String("fixture", os.Getenv("REDEEM_NIRI_FIXTURE"), "current Niri JSON fixture path")
 	niriCmd := fs.String("niri-cmd", captureNiriCommandDefault(resolvedConfig), "current Niri snapshot command")
 	if err := fs.Parse(args); err != nil {
@@ -561,7 +561,7 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	}
 	policy := resume.UnresolvedWorkspacePolicy(strings.ToLower(strings.TrimSpace(*unresolved)))
 	if policy != resume.UnresolvedSkip && policy != resume.UnresolvedCurrent && policy != resume.UnresolvedFail {
-		_, _ = fmt.Fprintln(stderr, "resume --unresolved-workspace must be skip, current, or fail")
+		_, _ = fmt.Fprintln(stderr, "resume --unresolved-workspace must be current, skip, or fail")
 		return 2
 	}
 
@@ -624,6 +624,9 @@ func printResumePlan(stdout io.Writer, plan resume.Plan) {
 			writef(stdout, " reason=%q", plan.Reason)
 		}
 		writeln(stdout)
+	}
+	if plan.CandidateStatus == resume.CandidateEmpty || plan.CandidateStatus == resume.CandidateStale || plan.CandidateStatus == resume.CandidateNotFound {
+		writef(stdout, "resume_guidance restore_tui=%q restore_at=%q\n", "redeem restore tui", "redeem restore apply --at <RFC3339>")
 	}
 	for _, item := range plan.Items {
 		writef(stdout, "resume_item window_key=%q session=%q status=%s", item.WindowKey, item.Session, item.Status)

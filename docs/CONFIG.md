@@ -38,7 +38,7 @@ restore:
   reconcileWorkspaceMoves: true
   workspaceReconcileDelay: 1200ms
   maxCheckpointAge: 24h       # implicit resume only; explicit restore is unaffected
-  unresolvedWorkspace: skip  # skip, current, or fail
+  unresolvedWorkspace: current # current, skip, or fail
   terminal:
     command: kitty
     zellijAttachOrCreate: true
@@ -72,8 +72,8 @@ mirror:
 
 `restore.maxCheckpointAge` defaults to the conservative 24 hours. An older selected candidate is reported as `stale`; resume does not fall back to an older checkpoint. `restore.unresolvedWorkspace` controls a per-terminal result when no current workspace matches by name, output plus index, or index:
 
-- `skip` (default): do not plan that terminal;
-- `current`: plan it as `degraded`, leaving eventual placement on the current workspace; or
+- `current` (default): plan it as `degraded`, leaving eventual placement on the current workspace;
+- `skip`: do not plan that terminal; or
 - `fail`: report the item as `failed`.
 
 CLI `--max-age` and `--unresolved-workspace` override these values for one dry run. Historical restore settings, including `terminal.zellijAttachOrCreate`, do not weaken resume: resume only verifies existing sessions and never plans attach-or-create.

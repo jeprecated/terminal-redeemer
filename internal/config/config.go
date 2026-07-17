@@ -122,7 +122,7 @@ func Defaults() Config {
 			ReconcileWorkspaceMoves: true,
 			WorkspaceReconcileDelay: 1200 * time.Millisecond,
 			MaxCheckpointAge:        24 * time.Hour,
-			UnresolvedWorkspace:     "skip",
+			UnresolvedWorkspace:     "current",
 			Terminal: TerminalConfig{
 				Command:              "kitty",
 				ZellijAttachOrCreate: true,
@@ -212,7 +212,7 @@ func Validate(cfg Config) error {
 	switch strings.ToLower(strings.TrimSpace(cfg.Restore.UnresolvedWorkspace)) {
 	case "skip", "current", "fail":
 	default:
-		return fmt.Errorf("restore.unresolvedWorkspace must be skip, current, or fail")
+		return fmt.Errorf("restore.unresolvedWorkspace must be current, skip, or fail")
 	}
 	if cfg.Mirror.DefaultMode != "attach" && cfg.Mirror.DefaultMode != "watch" {
 		return fmt.Errorf("mirror.defaultMode must be attach or watch")

@@ -52,7 +52,8 @@ func TestPlannerReconcilesAlreadyOpenDuplicateUnavailableAndReady(t *testing.T) 
 	now := time.Now().UTC()
 	captured := model.State{
 		Windows: []model.Window{
-			terminalWindow("w-open", "open", model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2}),
+			terminalWindow("w-open-a", "open", model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2}),
+			terminalWindow("w-open-b", "open", model.WorkspaceRef{Name: "dev", Output: "DP-1", Index: 2}),
 			terminalWindow("w-duplicate-a", "duplicate", model.WorkspaceRef{Index: 2}),
 			terminalWindow("w-duplicate-b", "duplicate", model.WorkspaceRef{Index: 2}),
 			terminalWindow("w-missing", "missing", model.WorkspaceRef{Index: 2}),
@@ -66,7 +67,8 @@ func TestPlannerReconcilesAlreadyOpenDuplicateUnavailableAndReady(t *testing.T) 
 	}
 
 	plan := NewPlanner(PlannerConfig{UnresolvedWorkspace: UnresolvedSkip}).Build(selection, current, []string{"open", "duplicate", "ready"})
-	assertItemStatus(t, plan, "w-open", StatusAlreadyOpen)
+	assertItemStatus(t, plan, "w-open-a", StatusAlreadyOpen)
+	assertItemStatus(t, plan, "w-open-b", StatusSkipped)
 	assertItemStatus(t, plan, "w-duplicate-a", StatusReady)
 	assertItemStatus(t, plan, "w-duplicate-b", StatusSkipped)
 	assertItemStatus(t, plan, "w-missing", StatusUnavailable)
@@ -74,7 +76,7 @@ func TestPlannerReconcilesAlreadyOpenDuplicateUnavailableAndReady(t *testing.T) 
 	if ready.Workspace == nil || ready.Workspace.Method != "name" || ready.Workspace.ID != "runtime-dev" {
 		t.Fatalf("ready workspace = %#v", ready.Workspace)
 	}
-	if plan.Summary.Ready != 2 || plan.Summary.AlreadyOpen != 1 || plan.Summary.Unavailable != 1 || plan.Summary.Skipped != 1 {
+	if plan.Summary.Ready != 2 || plan.Summary.AlreadyOpen != 1 || plan.Summary.Unavailable != 1 || plan.Summary.Skipped != 2 {
 		t.Fatalf("summary = %#v", plan.Summary)
 	}
 }
@@ -116,15 +118,17 @@ func TestResolveWorkspacePreferenceAndFallbacks(t *testing.T) {
 func TestUnresolvedWorkspacePolicies(t *testing.T) {
 	selection := readySelection(stateWithTerminal("w", "session", model.WorkspaceRef{Name: "gone"}))
 	tests := []struct {
+		name   string
 		policy UnresolvedWorkspacePolicy
 		status Status
 	}{
-		{policy: UnresolvedSkip, status: StatusSkipped},
-		{policy: UnresolvedCurrent, status: StatusDegraded},
-		{policy: UnresolvedFail, status: StatusFailed},
+		{name: "default", policy: "", status: StatusDegraded},
+		{name: "explicit skip", policy: UnresolvedSkip, status: StatusSkipped},
+		{name: "explicit current", policy: UnresolvedCurrent, status: StatusDegraded},
+		{name: "explicit fail", policy: UnresolvedFail, status: StatusFailed},
 	}
 	for _, tt := range tests {
-		t.Run(string(tt.policy), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			plan := NewPlanner(PlannerConfig{UnresolvedWorkspace: tt.policy}).Build(selection, model.State{}, []string{"session"})
 			assertItemStatus(t, plan, "w", tt.status)
 		})

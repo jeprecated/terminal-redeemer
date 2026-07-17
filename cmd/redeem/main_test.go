@@ -12,6 +12,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/replay"
+	"github.com/jmo/terminal-redeemer/internal/resume"
 )
 
 func TestHelpByDefault(t *testing.T) {
@@ -185,6 +186,26 @@ func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("dry run attempted an unexpected Zellij command")
+	}
+}
+
+func TestPrintResumePlanGuidesForensicSelectionForNonActionableCandidates(t *testing.T) {
+	for _, status := range []resume.CandidateStatus{resume.CandidateEmpty, resume.CandidateStale, resume.CandidateNotFound} {
+		t.Run(string(status), func(t *testing.T) {
+			var out bytes.Buffer
+			printResumePlan(&out, resume.Plan{CandidateStatus: status, Reason: "not actionable"})
+			for _, command := range []string{"redeem restore tui", "redeem restore apply --at <RFC3339>"} {
+				if !strings.Contains(out.String(), command) {
+					t.Fatalf("guidance missing %q: %s", command, out.String())
+				}
+			}
+		})
+	}
+
+	var ready bytes.Buffer
+	printResumePlan(&ready, resume.Plan{CandidateStatus: resume.CandidateReady})
+	if strings.Contains(ready.String(), "resume_guidance") {
+		t.Fatalf("ready candidate should not include forensic guidance: %s", ready.String())
 	}
 }
 

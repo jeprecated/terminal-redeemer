@@ -112,9 +112,9 @@ type Planner struct {
 
 func NewPlanner(config PlannerConfig) *Planner {
 	switch config.UnresolvedWorkspace {
-	case UnresolvedCurrent, UnresolvedFail:
+	case UnresolvedSkip, UnresolvedCurrent, UnresolvedFail:
 	default:
-		config.UnresolvedWorkspace = UnresolvedSkip
+		config.UnresolvedWorkspace = UnresolvedCurrent
 	}
 	return &Planner{config: config}
 }
@@ -200,13 +200,6 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 			plan.Items = append(plan.Items, item)
 			continue
 		}
-		if _, ok := open[session]; ok {
-			item.Status = StatusAlreadyOpen
-			item.Reason = "matching Zellij session is already open in a terminal window"
-			seenCaptured[session] = struct{}{}
-			plan.Items = append(plan.Items, item)
-			continue
-		}
 		if _, ok := seenCaptured[session]; ok {
 			item.Status = StatusSkipped
 			item.Reason = "duplicate captured Zellij session"
@@ -214,6 +207,12 @@ func (p *Planner) Build(selection Selection, current model.State, availableSessi
 			continue
 		}
 		seenCaptured[session] = struct{}{}
+		if _, ok := open[session]; ok {
+			item.Status = StatusAlreadyOpen
+			item.Reason = "matching Zellij session is already open in a terminal window"
+			plan.Items = append(plan.Items, item)
+			continue
+		}
 		if _, ok := available[session]; !ok {
 			item.Status = StatusUnavailable
 			item.Reason = "Zellij session is not available"
