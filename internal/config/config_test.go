@@ -43,6 +43,9 @@ func TestLoadMissingDefaultPathUsesDefaults(t *testing.T) {
 	if cfg.Restore.WorkspaceReconcileDelay <= 0 {
 		t.Fatalf("expected positive workspace reconcile delay, got %s", cfg.Restore.WorkspaceReconcileDelay)
 	}
+	if cfg.Restore.OnStartup {
+		t.Fatal("expected manual resume default (restore.onStartup false)")
+	}
 	if cfg.Restore.MaxCheckpointAge != 24*time.Hour || cfg.Restore.UnresolvedWorkspace != "current" || cfg.Restore.ResumeTimeout != 10*time.Second || cfg.Restore.ResumePollInterval != 100*time.Millisecond {
 		t.Fatalf("unexpected safe resume defaults: %#v", cfg.Restore)
 	}
@@ -74,6 +77,7 @@ processMetadata:
 retention:
   days: 14
 restore:
+  onStartup: true
   appAllowlist:
     firefox: firefox --new-window
   appMode:
@@ -142,6 +146,9 @@ mirror:
 	}
 	if cfg.Retention.Days != 14 {
 		t.Fatalf("expected retention days 14, got %d", cfg.Retention.Days)
+	}
+	if !cfg.Restore.OnStartup {
+		t.Fatal("expected onStartup true from YAML")
 	}
 	if cfg.Restore.Terminal.Command != "foot" {
 		t.Fatalf("expected terminal command foot, got %q", cfg.Restore.Terminal.Command)

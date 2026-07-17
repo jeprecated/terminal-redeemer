@@ -72,6 +72,7 @@
                     processWhitelist = [ "opencode" "claude" "zellij" ];
                     processWhitelistExtra = [ "tmux" ];
                     processIncludeSessionTag = false;
+                    restore.onStartup = true;
                     restore.appAllowlist = {
                       firefox = "firefox --new-window";
                     };
@@ -113,9 +114,12 @@
             rendered = cfg.programs.terminal-redeemer.renderedConfig;
             captureService = cfg.systemd.user.services.terminal-redeemer-capture;
             captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
+            resumeService = cfg.systemd.user.services.terminal-redeemer-resume;
             captureExecRaw = captureService.Service.ExecStart;
+            resumeExecRaw = resumeService.Service.ExecStart;
             pruneExecRaw = cfg.systemd.user.services.terminal-redeemer-prune.Service.ExecStart;
             captureExec = if builtins.isList captureExecRaw then builtins.concatStringsSep " " captureExecRaw else captureExecRaw;
+            resumeExec = if builtins.isList resumeExecRaw then builtins.concatStringsSep " " resumeExecRaw else resumeExecRaw;
             pruneExec = if builtins.isList pruneExecRaw then builtins.concatStringsSep " " pruneExecRaw else pruneExecRaw;
           in
           assert rendered.capture.snapshotEvery == 7;
@@ -125,6 +129,7 @@
           assert rendered.processMetadata.whitelist == [ "opencode" "claude" "zellij" ];
           assert rendered.processMetadata.whitelistExtra == [ "tmux" ];
           assert rendered.processMetadata.includeSessionTag == false;
+          assert rendered.restore.onStartup;
           assert rendered.restore.terminal.command == "foot";
           assert rendered.restore.terminal.zellijAttachOrCreate == false;
           assert rendered.restore.appAllowlist.firefox == "firefox --new-window";
@@ -145,6 +150,15 @@
           assert builtins.match ".* capture once" captureExec != null;
           assert builtins.match ".* --config .*/terminal-redeemer/config.yaml .*" pruneExec != null;
           assert builtins.match ".* prune run" pruneExec != null;
+          assert builtins.match ".* --config .*/terminal-redeemer/config.yaml resume" resumeExec != null;
+          assert builtins.match ".*resume.*resume.*" resumeExec == null;
+          assert resumeService.Service.Type == "oneshot";
+          assert resumeService.Service.Restart == "on-failure";
+          assert resumeService.Unit.StartLimitBurst == 5;
+          assert builtins.elem "graphical-session.target" resumeService.Unit.After;
+          assert builtins.elem "graphical-session.target" resumeService.Unit.PartOf;
+          assert resumeService.Install.WantedBy == [ "graphical-session.target" ];
+          assert builtins.elem "terminal-redeemer-resume.service" captureService.Unit.After;
           assert builtins.match ".*--state-dir.*" captureExec == null;
           assert builtins.match ".*--days.*" pruneExec == null;
           assert captureService.Service.Type == "oneshot";
@@ -180,6 +194,7 @@
             captureTimer = cfg.systemd.user.timers.terminal-redeemer-capture;
           in
           assert rendered.capture.interval == "60s";
+          assert !rendered.restore.onStartup;
           assert rendered.restore.maxCheckpointAge == "24h";
           assert rendered.restore.unresolvedWorkspace == "current";
           assert captureTimer.Timer.OnActiveSec == "60s";
@@ -187,6 +202,7 @@
           assert !(captureTimer.Timer ? Persistent);
           assert !(cfg.systemd.user.services ? terminal-redeemer-prune);
           assert !(cfg.systemd.user.timers ? terminal-redeemer-prune);
+          assert !(cfg.systemd.user.services ? terminal-redeemer-resume);
           hmCfg.activationPackage;
 
         checks.nixos-module-eval =
@@ -206,6 +222,7 @@
                     enable = true;
                     users.test = {
                       package = self.packages.${system}.terminal-redeemer;
+                      restore.onStartup = true;
                       restore.appMode.firefox = "oneshot";
                       restore.reconcileWorkspaceMoves = false;
                       restore.workspaceReconcileDelay = "3s";
@@ -219,11 +236,13 @@
             hmUser = nixosCfg.config.home-manager.users.test;
             rendered = hmUser.programs.terminal-redeemer.renderedConfig;
           in
+          assert rendered.restore.onStartup;
           assert rendered.restore.appMode.firefox == "oneshot";
           assert rendered.restore.reconcileWorkspaceMoves == false;
           assert rendered.restore.workspaceReconcileDelay == "3s";
           assert rendered.mirror.sourceHost == "source.example";
           assert rendered.mirror.defaultMode == "watch";
+          assert hmUser.systemd.user.services ? terminal-redeemer-resume;
           pkgs.runCommand "nixos-module-eval" { } "touch $out";
       })
     // {

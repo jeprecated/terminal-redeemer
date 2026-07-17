@@ -13,12 +13,20 @@ Mirroring is an explicit CLI action, not a continuous synchronization daemon. Ho
 
 ```bash
 redeem capture once
+redeem resume --dry-run  # inspect the prior-boot terminal plan; no mutation
+redeem resume            # idempotently apply that same plan
 redeem history list
 redeem restore tui
 redeem restore apply --at 10m --dry-run
 ```
 
-`restore apply` requires `--at`. Without `--yes` it previews; with `--yes` it executes. `restore tui` provides interactive timestamp/item selection.
+Manual `redeem resume` is the distributed default. It restores attachable Zellij terminals only; arbitrary GUI applications remain outside its default scope. `restore apply` requires `--at`. Without `--yes` it previews; with `--yes` it executes. `restore tui` provides interactive timestamp/item selection.
+
+## Optional startup resume
+
+Home Manager exposes `programs.terminal-redeemer.restore.onStartup`, defaulting to `false`. When explicitly enabled it installs a bounded-retry graphical-session user oneshot whose exact applying command is `redeem --config …/terminal-redeemer/config.yaml resume`; it does not contain another restore implementation. **Before enabling it, disable every host-local Niri/Kitty/Zellij startup restoration hook** to prevent duplicate ownership. Removing those old hooks from a consumer repository is a follow-up in that repository, not a change made here.
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for readiness, status meanings, migration, retention, disable/rollback, and journal commands.
 
 ## Live mirroring
 
@@ -70,6 +78,7 @@ See [docs/CONFIG.md](docs/CONFIG.md) for precedence/schema and [docs/OPERATIONS.
 ```bash
 redeem capture once|run
 redeem history list|inspect
+redeem resume [--dry-run]
 redeem restore apply|tui
 redeem prune run
 redeem doctor

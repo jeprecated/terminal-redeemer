@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,27 +41,103 @@ func TestRunSummaryAndFailureDetection(t *testing.T) {
 	}
 }
 
-func TestStateDirWritableCheck(t *testing.T) {
+func TestStatePathsCheckIsReadOnly(t *testing.T) {
 	t.Parallel()
 
-	stateDir := filepath.Join(t.TempDir(), "state")
-	result := StateDirWritableCheck{StateDir: stateDir}.Run(context.Background())
-	if result.Status != StatusPass {
-		t.Fatalf("expected pass, got %+v", result)
+	stateDir := filepath.Join(t.TempDir(), "missing-state")
+	result := StatePathsCheck{StateDir: stateDir}.Run(context.Background())
+	if result.Status != StatusPass || !strings.Contains(result.Detail, "events.jsonl") {
+		t.Fatalf("expected absent history paths to pass with guidance, got %+v", result)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("doctor state path check mutated the filesystem: %v", err)
 	}
 }
 
-func TestStateDirWritableCheckFailsOnWriteError(t *testing.T) {
+func TestBootIDCheck(t *testing.T) {
 	t.Parallel()
 
-	result := StateDirWritableCheck{
-		StateDir: t.TempDir(),
-		WriteFile: func(string, []byte, os.FileMode) error {
-			return errors.New("boom")
+	pass := BootIDCheck{Current: func() (string, error) { return "boot-a", nil }}.Run(context.Background())
+	if pass.Status != StatusPass {
+		t.Fatalf("expected pass, got %+v", pass)
+	}
+	fail := BootIDCheck{Current: func() (string, error) { return "", errors.New("no proc") }}.Run(context.Background())
+	if fail.Status != StatusFail || !strings.Contains(fail.Detail, "resume cannot select") {
+		t.Fatalf("expected actionable failure, got %+v", fail)
+	}
+}
+
+func TestNiriReadinessCheckOfflineAndLive(t *testing.T) {
+	t.Parallel()
+
+	fixture := filepath.Join(t.TempDir(), "niri.json")
+	if err := os.WriteFile(fixture, []byte(`{"workspaces":[],"windows":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	offline := NiriReadinessCheck{FixturePath: fixture}.Run(context.Background())
+	if offline.Status != StatusPass || !strings.Contains(offline.Detail, "live Niri IPC bypassed") {
+		t.Fatalf("unexpected offline result: %+v", offline)
+	}
+
+	unset := NiriReadinessCheck{Command: "niri msg -j windows"}.Run(context.Background())
+	if unset.Status != StatusFail || !strings.Contains(unset.Detail, "NIRI_SOCKET") {
+		t.Fatalf("expected socket guidance, got %+v", unset)
+	}
+
+	live := NiriReadinessCheck{
+		Command: "niri msg -j windows", Socket: "/run/user/1000/niri.sock",
+		LookPath: func(string) (string, error) { return "/bin/niri", nil },
+		Snapshot: func(context.Context) ([]byte, error) { return []byte(`{"workspaces":[],"windows":[]}`), nil },
+	}.Run(context.Background())
+	if live.Status != StatusPass {
+		t.Fatalf("expected live query pass, got %+v", live)
+	}
+}
+
+func TestResumeLauncherAndZellijListingChecks(t *testing.T) {
+	t.Parallel()
+
+	launcher := ResumeLauncherCheck{Command: "kitty", LookPath: func(file string) (string, error) {
+		if file != "kitty" {
+			t.Fatalf("unexpected launcher lookup %q", file)
+		}
+		return "/bin/kitty", nil
+	}}.Run(context.Background())
+	if launcher.Status != StatusPass || !strings.Contains(launcher.Detail, "client_pid") {
+		t.Fatalf("unexpected launcher result: %+v", launcher)
+	}
+
+	listing := ZellijListingCheck{
+		LookPath: func(string) (string, error) { return "/bin/zellij", nil },
+		RunCommand: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			if name != "zellij" || strings.Join(args, " ") != "list-sessions --short" {
+				t.Fatalf("unexpected command")
+			}
+			return []byte("one\ntwo\n"), nil
 		},
 	}.Run(context.Background())
-	if result.Status != StatusFail {
-		t.Fatalf("expected fail, got %+v", result)
+	if listing.Status != StatusPass || !strings.Contains(listing.Detail, "sessions=2") {
+		t.Fatalf("unexpected listing result: %+v", listing)
+	}
+}
+
+func TestStartupServiceCheckOptionality(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	disabled := StartupServiceCheck{Enabled: false, RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+		called = true
+		return nil, nil
+	}}.Run(context.Background())
+	if disabled.Status != StatusPass || called {
+		t.Fatalf("disabled startup must be an optional pass without systemctl: %+v called=%t", disabled, called)
+	}
+
+	enabled := StartupServiceCheck{Enabled: true, RunCommand: func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("disabled"), errors.New("exit 1")
+	}}.Run(context.Background())
+	if enabled.Status != StatusFail || !strings.Contains(enabled.Detail, "journalctl") {
+		t.Fatalf("expected enabled service guidance, got %+v", enabled)
 	}
 }
 

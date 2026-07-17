@@ -9,7 +9,9 @@ History restore and live mirroring are separate paths. Live mirroring currently 
 - source-side Zellij
 - `wl-paste`, `scp`, and Kitty remote control when the image bridge is enabled
 
-Commands are configurable. `redeem doctor` always checks the existing capture/restore dependencies; when `mirror.sourceHost` is configured it additionally checks mirror SSH, launcher, Niri, and enabled clipboard/SCP executables. Doctor does not connect to the source.
+Commands are configurable. `redeem doctor` is read-only: it does not create the state directory or write probe files. It reports config validity; Linux boot ID; exact state/events/snapshot paths and integrity; live Niri socket/query readiness (or an offline `REDEEM_NIRI_FIXTURE`); direct Kitty launcher availability and PID-correlation assumptions; Zellij executable/listing behavior; configured checkpoint-age/workspace/startup/capture policy; startup-service enablement when requested; and local-install shadowing. When `mirror.sourceHost` is configured it additionally checks mirror SSH, launcher, Niri, and enabled clipboard/SCP executables. Doctor does not connect to the source.
+
+A failed required check makes doctor exit 1. Disabled optional startup automation is a passing informational result, not a prerequisite failure. Use a valid Niri fixture to test doctor without a compositor; live mode requires `NIRI_SOCKET` and a successful windows/workspaces query.
 
 A non-Niri compositor cannot provide owned-window status/close. A non-Kitty launcher must implement the Kitty flags/control behavior used by the planner. Failures are reported rather than silently operating on unrelated windows.
 
@@ -17,7 +19,17 @@ A non-Niri compositor cannot provide owned-window status/close. A non-Kitty laun
 
 Enable `programs.terminal-redeemer.enable = true`. Home Manager writes `~/.config/terminal-redeemer/config.yaml`, installs the selected package, and optionally manages capture/prune timers. The capture timer starts and stops with `graphical-session.target`, waits one configured interval before its first activation, and repeats every configured interval while the graphical session is active. Its default interval is 60 seconds (`capture.interval = "60s"`). Each activation runs the same `redeem capture once` full reconciliation available to operators. A failed Niri windows/workspaces query exits the oneshot visibly in the user journal without appending a partial checkpoint; the next timer activation retries from a fresh full query.
 
-The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`.
+The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`. Home Manager, not a system service, owns graphical startup resume.
+
+Startup resume remains off by default. With `restore.onStartup = true`, Home Manager enables `terminal-redeemer-resume.service` as a `graphical-session.target` user oneshot. Its `ExecStart` is the same packaged executable, generated config path, and canonical `resume` subcommand used manually—there is no wrapper algorithm. The service completes only after `redeem resume` completes. It is ordered before capture when both are starting, while the capture timer still delays its first run by one interval. Resume itself only reads history, and capture/prune retain their single-writer lock.
+
+A missing/not-ready `NIRI_SOCKET`, failed Niri query, or other applying failure is journal-visible. systemd retries the idempotent command after 3 seconds, at most five starts within 30 seconds, then stops; there is no unbounded or persistent loop. Ensure the Niri session imports `NIRI_SOCKET` into the user manager and Kitty/Zellij are installed in the user or system profile:
+
+```bash
+systemctl --user show-environment | grep '^NIRI_SOCKET='
+systemctl --user status terminal-redeemer-resume.service
+journalctl --user -u terminal-redeemer-resume.service -b
+```
 
 Use build/evaluation before activation:
 
@@ -96,7 +108,27 @@ redeem resume --dry-run  # selection and reconciliation only
 redeem resume            # apply the same plan
 ```
 
-The dry run is non-mutating: it reads complete checkpoints, current Niri workspaces/windows and process metadata, and `zellij list-sessions --short`; it never attaches, creates, launches, or moves anything. Output starts with the selected prior boot ID and capture time, followed by stable `resume_item` records and a status-count summary. Applying adds `restored` results and separately reports `layout_status`; the other item statuses are `ready`, `already_open`, `unavailable`, `degraded`, `stale`, `failed`, and `skipped`.
+The dry run is non-mutating: it reads complete checkpoints, current Niri workspaces/windows and process metadata, and `zellij list-sessions --short`; it never attaches, creates, launches, or moves anything. Output starts with the selected prior boot ID and capture time, followed by stable `resume_item` records and a status-count summary.
+
+Candidate statuses are:
+
+- `ready`: a valid prior-boot checkpoint can be reconciled;
+- `empty`: the authoritative prior-boot checkpoint has no eligible terminals;
+- `stale`: it exceeds `restore.maxCheckpointAge`; and
+- `not_found`: no complete boot-aware checkpoint matches host/profile.
+
+Item statuses are:
+
+- `ready`: dry-run would attempt the item;
+- `already_open`: the exact verified Zellij session already has a current terminal;
+- `unavailable`: Zellij cannot list/attach/resurrect the captured session, which is never recreated;
+- `degraded`: the terminal is/would be available but required workspace resolution or optional layout is incomplete;
+- `stale`: the candidate age policy prevented the item;
+- `failed`: launch, PID correlation, attachment evidence, required move, or policy failed;
+- `skipped`: policy intentionally omitted the item; and
+- `restored`: attachment and required workspace placement were evidenced.
+
+Applying returns nonzero when any item is `failed`. Empty/stale/not-found candidates and unavailable/degraded/skipped items remain explicit results rather than silently selecting older history.
 
 The newest prior-boot candidate is authoritative even when it is empty. `empty`, `stale`, and `not_found` candidate statuses are visible no-ops rather than reasons to select older history. Their output includes actionable guidance to use `redeem restore tui` or `redeem restore apply --at ...` for explicit forensic selection, including legacy records without boot IDs.
 
@@ -112,6 +144,27 @@ There is no app-ID, creation-order, or nearest-window fallback. A launcher that 
 Workspace resolution uses captured durable metadata in this order: exact name, output plus index, then index. See `restore.unresolvedWorkspace` in `docs/CONFIG.md` for unresolved-target behavior. With the `current` policy, an attached session whose target cannot be resolved remains `degraded`, never `restored`. Floating state and supported width/height actions are attempted only after required placement; column ordering is reported as unsupported because Niri cannot target that action by window ID safely. Optional layout failures do not change a required `restored` result.
 
 An `already_open` result comes from a current terminal with the same verified Zellij session, or from the exact `/proc` attachment evidence checked immediately before each launch. Mere presence in Zellij's session list means available, not open. Missing sessions and attach exits are `unavailable` and are never recreated.
+
+## Retention, migration, and rollback
+
+Resume can only select history that capture retained. `retention.days` and prune therefore bound the reboot recovery horizon independently of `restore.maxCheckpointAge`; choose retention longer than the maximum acceptable resume age. A short retention window may produce `not_found`, while an old retained candidate produces `stale`. An `empty` newest prior boot is authoritative and does not fall back. Before reboot testing, run `redeem capture once`, then verify `redeem resume --dry-run` after the boot.
+
+Migrate one owner at a time:
+
+1. Deploy Terminal Redeemer capture with `restore.onStartup = false`.
+2. Verify periodic/current capture, boot IDs, history paths, `redeem doctor`, manual `redeem resume --dry-run`, and manual idempotence (a second apply opens nothing).
+3. **Disable every host-local Niri/Kitty/Zellij startup restoration script, service, timer, autostart entry, or compositor startup command. This is required before the next step.** Capture-only legacy tooling must also not write Terminal Redeemer's state directory.
+4. Enable `programs.terminal-redeemer.restore.onStartup = true`, rebuild, reboot, and inspect the user journal.
+5. Remove obsolete host-local restoration code from the consumer configuration repository as a separate consumer-owned follow-up; this repository does not remove it.
+
+To disable or roll back automation, set `restore.onStartup = false` and rebuild. This removes the generated startup unit while preserving history and manual `redeem resume`. If immediate containment is needed before rebuild, stop/disable the user unit and keep all other startup restorers off until ownership is deliberately reassigned:
+
+```bash
+systemctl --user disable --now terminal-redeemer-resume.service
+redeem resume --dry-run
+```
+
+Do not re-enable a host-local restorer concurrently. Rollback of startup automation does not delete history; use the configured prune policy if deletion is intended.
 
 ## Existing capture/restore operations
 

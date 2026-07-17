@@ -836,6 +836,11 @@ func TestDoctorPassExitCode(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", pathDir)
+	fixturePath := filepath.Join(root, "niri.json")
+	if err := os.WriteFile(fixturePath, []byte(`{"workspaces":[],"windows":[]}`), 0o600); err != nil {
+		t.Fatalf("write doctor fixture: %v", err)
+	}
+	t.Setenv("REDEEM_NIRI_FIXTURE", fixturePath)
 	// Set HOME to temp dir so localInstallPath() doesn't find a real ~/.local/bin/redeem.
 	t.Setenv("HOME", root)
 
@@ -845,8 +850,16 @@ func TestDoctorPassExitCode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d output=%q", code, out.String())
 	}
-	if !strings.Contains(out.String(), "doctor_summary total=8 passed=8 failed=0") {
+	if !strings.Contains(out.String(), "doctor_summary total=11 passed=11 failed=0") {
 		t.Fatalf("unexpected doctor summary: %q", out.String())
+	}
+	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service"} {
+		if !strings.Contains(out.String(), "doctor_check name="+name+" status=pass") {
+			t.Fatalf("doctor output missing passing %s check: %q", name, out.String())
+		}
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("doctor must not create the configured state directory: %v", err)
 	}
 	if stderrWithoutWarning(stderr.String()) != "" {
 		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", stderr.String())

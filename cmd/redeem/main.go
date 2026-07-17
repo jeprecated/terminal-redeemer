@@ -98,14 +98,23 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 	}
 
 	checks := []doctor.Check{
-		doctor.StateDirWritableCheck{StateDir: resolvedConfig.StateDir},
 		doctor.ConfigLoadCheck{Path: flags.configPath, Explicit: flags.explicitConfig},
-		doctor.NiriSourceCheck{
+		doctor.StatePathsCheck{StateDir: resolvedConfig.StateDir},
+		doctor.BootIDCheck{Current: bootid.Current},
+		doctor.NiriReadinessCheck{
 			FixturePath: strings.TrimSpace(os.Getenv("REDEEM_NIRI_FIXTURE")),
 			Command:     captureNiriCommandDefault(resolvedConfig),
+			Socket:      os.Getenv("NIRI_SOCKET"),
 		},
-		doctor.CommandAvailableCheck{CheckName: "kitty_available", Command: resolvedConfig.Restore.Terminal.Command},
-		doctor.CommandAvailableCheck{CheckName: "zellij_available", Command: "zellij"},
+		doctor.ResumeLauncherCheck{Command: resolvedConfig.Restore.Terminal.Command},
+		doctor.ZellijListingCheck{},
+		doctor.ResumePolicyCheck{
+			MaxCheckpointAge:    resolvedConfig.Restore.MaxCheckpointAge,
+			UnresolvedWorkspace: resolvedConfig.Restore.UnresolvedWorkspace,
+			OnStartup:           resolvedConfig.Restore.OnStartup,
+			CaptureInterval:     resolvedConfig.Capture.Interval,
+		},
+		doctor.StartupServiceCheck{Enabled: resolvedConfig.Restore.OnStartup},
 		doctor.LocalInstallCheck{Path: localInstallPath()},
 		doctor.EventsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 		doctor.SnapshotsIntegrityCheck{StateDir: resolvedConfig.StateDir},
@@ -1485,7 +1494,7 @@ func printHelp(w io.Writer) {
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
 	writeln(w, "  prune     Prune old events/snapshots")
 	writeln(w, "  bottle    Bottle workflows (V2)")
-	writeln(w, "  doctor    Basic environment checks")
+	writeln(w, "  doctor    Read-only capture/resume diagnostics")
 	writeln(w)
 	writeln(w, "Flags:")
 	writeln(w, "  --config <path>  Path to YAML config file")

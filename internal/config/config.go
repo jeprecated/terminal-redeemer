@@ -40,6 +40,7 @@ type RetentionConfig struct {
 }
 
 type RestoreConfig struct {
+	OnStartup               bool              `yaml:"onStartup"`
 	AppAllowlist            map[string]string `yaml:"appAllowlist"`
 	AppMode                 map[string]string `yaml:"appMode"`
 	ReconcileWorkspaceMoves bool              `yaml:"reconcileWorkspaceMoves"`
@@ -119,6 +120,7 @@ func Defaults() Config {
 		},
 		Retention: RetentionConfig{Days: 30},
 		Restore: RestoreConfig{
+			OnStartup:               false,
 			AppAllowlist:            map[string]string{},
 			AppMode:                 map[string]string{},
 			ReconcileWorkspaceMoves: true,

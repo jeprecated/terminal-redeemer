@@ -7,7 +7,23 @@ in {
     enable = lib.mkEnableOption "terminal-redeemer user setup via Home Manager";
 
     users = lib.mkOption {
-      type = lib.types.attrsOf lib.types.attrs;
+      type = lib.types.attrsOf (lib.types.submodule {
+        freeformType = lib.types.attrs;
+        options.restore = lib.mkOption {
+          type = lib.types.submodule {
+            freeformType = lib.types.attrs;
+            options.onStartup = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Run the Home Manager-owned graphical-session resume service for this user.
+                Disable host-local startup restoration before enabling this option.
+              '';
+            };
+          };
+          default = { };
+        };
+      });
       default = { };
       description = ''
         Per-user Home Manager `programs.terminal-redeemer` configuration.

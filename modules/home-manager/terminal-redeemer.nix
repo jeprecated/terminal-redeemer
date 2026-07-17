@@ -20,6 +20,7 @@ let
       includeSessionTag = cfg.processIncludeSessionTag;
     };
     restore = {
+      onStartup = cfg.restore.onStartup;
       appAllowlist = cfg.restore.appAllowlist;
       appMode = cfg.restore.appMode;
       reconcileWorkspaceMoves = cfg.restore.reconcileWorkspaceMoves;
@@ -58,7 +59,9 @@ let
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
   configPath = "${config.xdg.configHome}/terminal-redeemer/config.yaml";
   captureExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} capture once";
+  resumeExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} resume";
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
+  graphicalPath = "${config.home.profileDirectory}/bin:/run/current-system/sw/bin";
 in {
   options.programs.terminal-redeemer = {
     enable = lib.mkEnableOption "terminal-redeemer";
@@ -147,6 +150,15 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Whether to include session tag extraction for terminals.";
+    };
+
+    restore.onStartup = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run the canonical `redeem resume` command at graphical-session startup.
+        Keep this disabled until any host-local startup restoration is disabled.
+      '';
     };
 
     restore.appAllowlist = lib.mkOption {
@@ -254,13 +266,33 @@ in {
     systemd.user.services.terminal-redeemer-capture = lib.mkIf cfg.capture.enable {
       Unit = {
         Description = "terminal-redeemer complete Niri state capture";
-        After = [ "graphical-session.target" ];
+        After = [ "graphical-session.target" ]
+          ++ lib.optional cfg.restore.onStartup "terminal-redeemer-resume.service";
         PartOf = [ "graphical-session.target" ];
       };
       Service = {
         Type = "oneshot";
         ExecStart = captureExecStart;
       };
+    };
+
+    systemd.user.services.terminal-redeemer-resume = lib.mkIf cfg.restore.onStartup {
+      Unit = {
+        Description = "terminal-redeemer prior-boot terminal resume";
+        After = [ "graphical-session.target" ];
+        Before = [ "terminal-redeemer-capture.service" ];
+        PartOf = [ "graphical-session.target" ];
+        StartLimitIntervalSec = "30s";
+        StartLimitBurst = 5;
+      };
+      Service = {
+        Type = "oneshot";
+        ExecStart = resumeExecStart;
+        Environment = [ "PATH=${graphicalPath}" ];
+        Restart = "on-failure";
+        RestartSec = "3s";
+      };
+      Install.WantedBy = [ "graphical-session.target" ];
     };
 
     systemd.user.timers.terminal-redeemer-capture = lib.mkIf cfg.capture.enable {

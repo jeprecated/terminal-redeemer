@@ -33,6 +33,7 @@ retention:
   days: 30
 
 restore:
+  onStartup: false            # manual resume is the distributed default
   appAllowlist: {}
   appMode: {}                  # per_window or oneshot
   reconcileWorkspaceMoves: true
@@ -69,6 +70,8 @@ mirror:
 `host` and `mirror.sourceHost` are deliberately different: `host` labels locally captured history and source-side snapshot JSON, while `mirror.sourceHost` is the SSH destination used by a consuming machine.
 
 ## Resume policy
+
+`restore.onStartup` is policy consumed by the Home Manager module and reported by `redeem doctor`; it defaults to `false`. Setting it in a hand-written YAML file does not itself install a service. The Home Manager option `programs.terminal-redeemer.restore.onStartup = true` renders the same YAML value and installs the graphical user service. The NixOS wrapper exposes the same typed per-user option at `programs.terminal-redeemer.users.<name>.restore.onStartup`, while Home Manager remains the owner of the user service.
 
 `redeem resume --dry-run` considers only complete, boot-aware checkpoints for the configured `host` and `profile`. It selects the newest checkpoint whose Linux boot ID differs from the current boot before checking whether that checkpoint is empty or stale. Legacy history without `boot_id` remains available to `restore apply --at` and `restore tui`, but is never selected implicitly.
 
@@ -115,7 +118,18 @@ Config loading rejects invalid mirror modes, empty required commands/app ID, neg
 
 ## Home Manager / NixOS
 
-All mirror keys above are typed under `programs.terminal-redeemer.mirror`. The NixOS wrapper forwards per-user settings to the Home Manager module. `extraConfig` remains available for additional raw YAML, but typed options should be preferred.
+All mirror keys above and `restore.onStartup` are typed under `programs.terminal-redeemer`. The NixOS wrapper forwards typed per-user startup policy and other per-user settings to the Home Manager module; it deliberately does not invent a system-level GUI restore service. `extraConfig` remains available for additional raw YAML, but typed options should be preferred.
+
+Example (after disabling all host-local startup restorers):
+
+```nix
+programs.terminal-redeemer = {
+  enable = true;
+  restore.onStartup = true;
+};
+```
+
+The generated service relies on `NIRI_SOCKET` being imported into the systemd user-manager environment and on Kitty/Zellij being available in the Home Manager or system profile. It retries failed readiness/apply attempts only five times within 30 seconds, then remains failed and journal-visible; there is no persistent retry loop.
 
 Capture-only environment compatibility remains:
 
