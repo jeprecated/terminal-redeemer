@@ -30,3 +30,32 @@ Keep the complete 60-second reconciliation cadence while appending history only 
 ## Implementation Notes
 
 ADR follow-up to docs/adr/0001-resume-zellij-terminals-in-niri.md. Likely areas: internal/capture, a durable boot-checkpoint store, internal/replay/resume selection, prune, doctor, docs/CONFIG.md, docs/OPERATIONS.md. Use advisory store locking and fsync/atomic rename discipline. Parent owns Frontloop lifecycle; writer must not edit task files.
+
+
+## Completion Summary
+
+- Added crash-durable rolling checkpoints scoped by boot, host, and profile with atomic fsync/rename publication.
+- Changed periodic capture to append first-boot and changed-state events only while refreshing checkpoint observation time on every successful full reconciliation.
+- Merged rolling checkpoints with durable event fallback for prior-boot resume, including empty, stale, corrupt, and crash-boundary semantics.
+- Extended pruning, doctor diagnostics, Home Manager descriptions, operational documentation, and focused concurrency/recovery tests.
+- Passed independent read-only Opus judgment and parent Go, race, and Nix validation.
+
+### Files Changed
+
+- README.md
+- cmd/redeem/main.go
+- cmd/redeem/main_test.go
+- docs/CONFIG.md
+- docs/OPERATIONS.md
+- internal/capture/change_only_test.go
+- internal/capture/runner.go
+- internal/capture/runner_test.go
+- internal/checkpoints/store.go
+- internal/checkpoints/store_test.go
+- internal/doctor/checks.go
+- internal/events/store.go
+- internal/prune/prune.go
+- internal/prune/prune_test.go
+- internal/replay/history.go
+- internal/replay/resume_checkpoints_test.go
+- modules/home-manager/terminal-redeemer.nix
