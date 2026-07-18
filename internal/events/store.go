@@ -114,11 +114,19 @@ func NewStoreWithBootIDSource(root string, source bootid.Source) (*Store, error)
 	}, nil
 }
 
+func (s *Store) Root() string { return s.root }
+
 type Writer struct {
 	lock         *storelock.Lock
 	file         *os.File
 	bootIDSource bootid.Source
+	bootID       string
 	syncFile     func(*os.File) error
+}
+
+type Record struct {
+	Event     Event
+	EndOffset int64
 }
 
 func (s *Store) AcquireWriter() (*Writer, error) {
@@ -144,8 +152,24 @@ func (s *Store) AcquireWriter() (*Writer, error) {
 	return &Writer{lock: lock, file: eventsFile, bootIDSource: s.bootIDSource, syncFile: s.syncFile}, nil
 }
 
-func (w *Writer) Append(event Event) (int64, error) {
+func (w *Writer) BootID() (string, error) {
+	if w.bootID != "" {
+		return w.bootID, nil
+	}
 	id, err := w.bootIDSource()
+	if err != nil {
+		return "", fmt.Errorf("read boot ID: %w", err)
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", errors.New("boot ID is empty")
+	}
+	w.bootID = id
+	return id, nil
+}
+
+func (w *Writer) Append(event Event) (int64, error) {
+	id, err := w.BootID()
 	if err != nil {
 		return 0, err
 	}
@@ -177,6 +201,23 @@ func (w *Writer) Append(event Event) (int64, error) {
 	}
 
 	return offset, nil
+}
+
+// Records returns the complete durable event prefix while the caller still
+// holds the writer lock. Capture uses this to compare against current-boot
+// evidence without recursively acquiring the repository lock.
+func (w *Writer) Records() ([]Record, error) {
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seek event log: %w", err)
+	}
+	records, _, err := ReadLogRecords(w.file)
+	if err != nil {
+		return nil, err
+	}
+	if _, seekErr := w.file.Seek(0, io.SeekEnd); seekErr != nil {
+		return nil, fmt.Errorf("seek event log end: %w", seekErr)
+	}
+	return records, nil
 }
 
 func (w *Writer) Close() error {
@@ -217,8 +258,22 @@ func (s *Store) ReadSince(cursor int64) ([]Event, int64, error) {
 // and excluded from consumed so a later read can retry it after recovery. Any
 // malformed record followed by more data is corruption and returns an error.
 func ReadLog(r io.Reader) ([]Event, int64, error) {
+	records, consumed, err := ReadLogRecords(r)
+	if err != nil {
+		return nil, consumed, err
+	}
+	out := make([]Event, len(records))
+	for i := range records {
+		out[i] = records[i].Event
+	}
+	return out, consumed, nil
+}
+
+// ReadLogRecords is ReadLog with the durable end offset of each complete
+// record. Offsets are references into the event file at the time of reading.
+func ReadLogRecords(r io.Reader) ([]Record, int64, error) {
 	reader := bufio.NewReader(r)
-	out := make([]Event, 0)
+	out := make([]Record, 0)
 	var consumed int64
 	lineNumber := 0
 
@@ -252,8 +307,8 @@ func ReadLog(r io.Reader) ([]Event, int64, error) {
 			return nil, consumed, fmt.Errorf("invalid event at line %d: %w", lineNumber, decodeErr)
 		}
 
-		out = append(out, event)
 		consumed += int64(len(line))
+		out = append(out, Record{Event: event, EndOffset: consumed})
 		if errors.Is(readErr, io.EOF) {
 			return out, consumed, nil
 		}

@@ -21,7 +21,7 @@ profile: default
 
 capture:
   interval: 60s
-  snapshotEvery: 100
+  snapshotEvery: 100          # legacy timestamped replay snapshot cadence (changed events)
   niriCommand: niri msg -j windows
 
 processMetadata:
@@ -67,13 +67,15 @@ mirror:
     mimeTypes: [image/png, image/jpeg, image/webp, image/gif]
 ```
 
-`host` and `mirror.sourceHost` are deliberately different: `host` labels locally captured history and source-side snapshot JSON, while `mirror.sourceHost` is the SSH destination used by a consuming machine.
+`host` and `mirror.sourceHost` are deliberately different: `host` labels locally captured history, rolling checkpoint identity, and source-side snapshot JSON, while `mirror.sourceHost` is the SSH destination used by a consuming machine. A shared `stateDir` therefore keeps separate rolling checkpoint files for every boot/host/profile tuple.
+
+`capture.interval` controls complete query cadence, not history-write cadence. Every timer activation and `redeem capture once` queries all Niri windows/workspaces and refreshes terminal process metadata. The first success in each Linux boot appends a boot-aware full-state event. Later same-boot successes append only after the normalized `model.State` hash changes, but atomically refresh that boot's rolling checkpoint even when unchanged. `capture.snapshotEvery` continues to control older timestamped replay snapshots within a running capture process; separate one-shot invocations do not accumulate that legacy counter. It is not the rolling resume checkpoint cadence.
 
 ## Resume policy
 
 `restore.onStartup` is policy consumed by the Home Manager module and reported by `redeem doctor`; it defaults to `false`. Setting it in a hand-written YAML file does not itself install a service. The Home Manager option `programs.terminal-redeemer.restore.onStartup = true` renders the same YAML value and installs the graphical user service. The NixOS wrapper exposes the same typed per-user option at `programs.terminal-redeemer.users.<name>.restore.onStartup`, while Home Manager remains the owner of the user service.
 
-`redeem resume --dry-run` considers only complete, boot-aware checkpoints for the configured `host` and `profile`. It selects the newest checkpoint whose Linux boot ID differs from the current boot before checking whether that checkpoint is empty or stale. Legacy history without `boot_id` remains available to `restore apply --at` and `restore tui`, but is never selected implicitly.
+`redeem resume --dry-run` considers complete rolling checkpoints and boot-aware `state_full` event fallback for the configured `host` and `profile`. For each prior boot it uses the newest valid observation: rolling `observed_at` supplies freshness after unchanged captures, while a newer durable event wins if publication was interrupted. Missing or malformed rolling files do not hide valid event evidence. It then selects the newest prior boot before checking whether that candidate is empty or stale. Ties are deterministic, and a newer authoritative empty candidate never falls back to an older non-empty boot. Legacy history without `boot_id` remains available to `restore apply --at` and `restore tui`, but is never selected implicitly.
 
 `restore.maxCheckpointAge` defaults to the conservative 24 hours. An older selected candidate is reported as `stale`; resume does not fall back to an older checkpoint. `restore.unresolvedWorkspace` controls a per-terminal result when no current workspace matches by name, output plus index, or index:
 

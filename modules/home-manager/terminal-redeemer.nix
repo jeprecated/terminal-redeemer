@@ -110,13 +110,13 @@ in {
       snapshotEvery = lib.mkOption {
         type = lib.types.int;
         default = 100;
-        description = "Write snapshot every N events.";
+        description = "Write a legacy timestamped replay snapshot every N changed events; rolling per-boot checkpoints refresh after every successful complete capture.";
       };
 
       niriCommand = lib.mkOption {
         type = lib.types.str;
         default = "niri msg -j windows";
-        description = "Command used to collect Niri JSON snapshots.";
+        description = "Command used on every capture interval to query complete Niri window/workspace JSON.";
       };
     };
 

@@ -1,0 +1,262 @@
+// Package checkpoints stores one crash-durable rolling full-state checkpoint
+// for each boot, host, and profile identity.
+package checkpoints
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/jmo/terminal-redeemer/internal/model"
+)
+
+var (
+	ErrNotFound = errors.New("rolling checkpoint not found")
+	ErrInvalid  = errors.New("invalid rolling checkpoint")
+)
+
+const SchemaVersion = 1
+
+type Checkpoint struct {
+	V           int         `json:"v"`
+	BootID      string      `json:"boot_id"`
+	Host        string      `json:"host"`
+	Profile     string      `json:"profile"`
+	ObservedAt  time.Time   `json:"observed_at"`
+	State       model.State `json:"state"`
+	StateHash   string      `json:"state_hash"`
+	EventOffset int64       `json:"event_offset"`
+}
+
+func (c Checkpoint) Validate() error {
+	if c.V != SchemaVersion {
+		return fmt.Errorf("schema version is %d, want %d", c.V, SchemaVersion)
+	}
+	if strings.TrimSpace(c.BootID) == "" {
+		return errors.New("boot_id is required")
+	}
+	if strings.TrimSpace(c.Host) == "" {
+		return errors.New("host is required")
+	}
+	if strings.TrimSpace(c.Profile) == "" {
+		return errors.New("profile is required")
+	}
+	if c.ObservedAt.IsZero() {
+		return errors.New("observed_at is required")
+	}
+	if strings.TrimSpace(c.StateHash) == "" {
+		return errors.New("state_hash is required")
+	}
+	if c.EventOffset <= 0 {
+		return errors.New("event_offset must be positive")
+	}
+	hash, err := c.State.Hash()
+	if err != nil {
+		return fmt.Errorf("hash state: %w", err)
+	}
+	if hash != c.StateHash {
+		return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
+	}
+	return nil
+}
+
+type Issue struct {
+	Path string
+	Err  error
+}
+
+type Store struct {
+	dir      string
+	syncFile func(*os.File) error
+	syncDir  func(string) error
+	rename   func(string, string) error
+}
+
+func NewStore(root string) (*Store, error) {
+	dir := filepath.Join(root, "checkpoints")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create rolling checkpoints dir: %w", err)
+	}
+	if err := syncDirectory(root); err != nil {
+		return nil, fmt.Errorf("sync state dir: %w", err)
+	}
+	return &Store{
+		dir:      dir,
+		syncFile: func(file *os.File) error { return file.Sync() },
+		syncDir:  syncDirectory,
+		rename:   os.Rename,
+	}, nil
+}
+
+func pathName(bootID, host, profile string) string {
+	identity, _ := json.Marshal([]string{bootID, host, profile})
+	sum := sha256.Sum256(identity)
+	return hex.EncodeToString(sum[:]) + ".json"
+}
+
+func (s *Store) Path(bootID, host, profile string) string {
+	return filepath.Join(s.dir, pathName(bootID, host, profile))
+}
+
+func (s *Store) Read(bootID, host, profile string) (Checkpoint, error) {
+	path := s.Path(bootID, host, profile)
+	checkpoint, err := readPath(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return Checkpoint{}, ErrNotFound
+	}
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if checkpoint.BootID != bootID || checkpoint.Host != host || checkpoint.Profile != profile {
+		return Checkpoint{}, fmt.Errorf("%w: identity does not match deterministic path", ErrInvalid)
+	}
+	return checkpoint, nil
+}
+
+func readPath(path string) (Checkpoint, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	var checkpoint Checkpoint
+	if err := json.Unmarshal(payload, &checkpoint); err != nil {
+		return Checkpoint{}, fmt.Errorf("%w: decode %s: %v", ErrInvalid, filepath.Base(path), err)
+	}
+	checkpoint.State = model.Normalize(checkpoint.State)
+	if err := checkpoint.Validate(); err != nil {
+		return Checkpoint{}, fmt.Errorf("%w: validate %s: %v", ErrInvalid, filepath.Base(path), err)
+	}
+	return checkpoint, nil
+}
+
+// Write replaces the identity's rolling checkpoint using temp-write, file
+// fsync, atomic rename, and directory fsync. Callers hold the repository's
+// single-writer lock for the complete read/compare/event/checkpoint mutation.
+func (s *Store) Write(checkpoint Checkpoint) (path string, err error) {
+	checkpoint.ObservedAt = checkpoint.ObservedAt.UTC()
+	checkpoint.State = model.Normalize(checkpoint.State)
+	if err := checkpoint.Validate(); err != nil {
+		return "", fmt.Errorf("validate rolling checkpoint: %w", err)
+	}
+	payload, err := json.Marshal(checkpoint)
+	if err != nil {
+		return "", fmt.Errorf("marshal rolling checkpoint: %w", err)
+	}
+	payload = append(payload, '\n')
+
+	path = s.Path(checkpoint.BootID, checkpoint.Host, checkpoint.Profile)
+	tmp, err := os.CreateTemp(s.dir, ".checkpoint-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create rolling checkpoint temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	written, err := tmp.Write(payload)
+	if err != nil {
+		return "", fmt.Errorf("write rolling checkpoint temp file: %w", err)
+	}
+	if written != len(payload) {
+		return "", io.ErrShortWrite
+	}
+	if err := s.syncFile(tmp); err != nil {
+		return "", fmt.Errorf("sync rolling checkpoint temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close rolling checkpoint temp file: %w", err)
+	}
+	if err := s.rename(tmpPath, path); err != nil {
+		return "", fmt.Errorf("rename rolling checkpoint: %w", err)
+	}
+	if err := s.syncDir(s.dir); err != nil {
+		return "", fmt.Errorf("sync rolling checkpoints dir: %w", err)
+	}
+	return path, nil
+}
+
+// List reads every valid rolling checkpoint. A malformed checkpoint is
+// reported as an issue without hiding other valid checkpoint or event history.
+func List(root string) ([]Checkpoint, []Issue, error) {
+	dir := filepath.Join(root, "checkpoints")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("read rolling checkpoints dir: %w", err)
+	}
+	out := make([]Checkpoint, 0, len(entries))
+	issues := make([]Issue, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		checkpoint, readErr := readPath(path)
+		if readErr != nil {
+			issues = append(issues, Issue{Path: path, Err: readErr})
+			continue
+		}
+		if entry.Name() != pathName(checkpoint.BootID, checkpoint.Host, checkpoint.Profile) {
+			issues = append(issues, Issue{Path: path, Err: fmt.Errorf("%w: identity does not match filename", ErrInvalid)})
+			continue
+		}
+		out = append(out, checkpoint)
+	}
+	return out, issues, nil
+}
+
+// Prune removes valid rolling checkpoints whose latest successful observation
+// predates cutoff. The caller holds the repository's single-writer lock.
+func Prune(root string, cutoff time.Time) (int, error) {
+	dir := filepath.Join(root, "checkpoints")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read rolling checkpoints dir: %w", err)
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		checkpoint, readErr := readPath(path)
+		if readErr != nil || !checkpoint.ObservedAt.Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return removed, fmt.Errorf("remove expired rolling checkpoint %s: %w", entry.Name(), err)
+		}
+		removed++
+	}
+	if removed > 0 {
+		if err := syncDirectory(dir); err != nil {
+			return removed, fmt.Errorf("sync rolling checkpoints dir after prune: %w", err)
+		}
+	}
+	return removed, nil
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
+}

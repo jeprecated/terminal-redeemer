@@ -3,10 +3,13 @@ package capture
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/diff"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/model"
@@ -21,44 +24,49 @@ type EventStore interface {
 	AcquireWriter() (*events.Writer, error)
 }
 
+type CheckpointStore interface {
+	Read(bootID, host, profile string) (checkpoints.Checkpoint, error)
+	Write(checkpoint checkpoints.Checkpoint) (string, error)
+}
+
 type SnapshotStore interface {
 	Write(snapshot snapshots.Snapshot) (string, error)
 }
 
 type Config struct {
-	Collector     Collector
-	DiffEngine    *diff.Engine
-	EventStore    EventStore
-	SnapshotStore SnapshotStore
-	SnapshotEvery int
-	Host          string
-	Profile       string
-	Source        string
-	Now           func() time.Time
-	Logger        io.Writer
+	Collector       Collector
+	DiffEngine      *diff.Engine // retained for API compatibility; capture persists full states
+	EventStore      EventStore
+	CheckpointStore CheckpointStore
+	SnapshotStore   SnapshotStore
+	SnapshotEvery   int
+	Host            string
+	Profile         string
+	Source          string
+	Now             func() time.Time
+	Logger          io.Writer
 }
 
 type Runner struct {
-	collector     Collector
-	diffEngine    *diff.Engine
-	eventStore    EventStore
-	snapshotStore SnapshotStore
-	snapshotEvery int
-	host          string
-	profile       string
-	source        string
-	now           func() time.Time
-	logger        io.Writer
+	collector       Collector
+	eventStore      EventStore
+	checkpointStore CheckpointStore
+	snapshotStore   SnapshotStore
+	snapshotEvery   int
+	host            string
+	profile         string
+	source          string
+	now             func() time.Time
+	logger          io.Writer
 
-	lastState  model.State
-	hasLast    bool
 	eventCount int
 }
 
 type Result struct {
-	EventsWritten int
-	SnapshotPath  string
-	StateHash     string
+	EventsWritten  int
+	CheckpointPath string
+	SnapshotPath   string
+	StateHash      string
 }
 
 func NewRunner(config Config) *Runner {
@@ -72,152 +80,126 @@ func NewRunner(config Config) *Runner {
 	}
 
 	return &Runner{
-		collector:     config.Collector,
-		diffEngine:    config.DiffEngine,
-		eventStore:    config.EventStore,
-		snapshotStore: config.SnapshotStore,
-		snapshotEvery: config.SnapshotEvery,
-		host:          config.Host,
-		profile:       config.Profile,
-		source:        config.Source,
-		now:           now,
-		logger:        logger,
+		collector:       config.Collector,
+		eventStore:      config.EventStore,
+		checkpointStore: config.CheckpointStore,
+		snapshotStore:   config.SnapshotStore,
+		snapshotEvery:   config.SnapshotEvery,
+		host:            strings.TrimSpace(config.Host),
+		profile:         strings.TrimSpace(config.Profile),
+		source:          config.Source,
+		now:             now,
+		logger:          logger,
 	}
 }
 
+// CaptureOnce always performs a complete collection. It suppresses history
+// only after acquiring the repository writer lock and comparing the normalized
+// result with the newest same-boot checkpoint/event evidence.
 func (r *Runner) CaptureOnce(ctx context.Context) (Result, error) {
-	return r.captureStateFull(ctx)
-}
-
-func (r *Runner) captureStateFull(ctx context.Context) (Result, error) {
 	state, err := r.collector.Collect(ctx)
 	if err != nil {
 		return Result{}, err
+	}
+	state = model.Normalize(state)
+	stateHash, err := state.Hash()
+	if err != nil {
+		return Result{}, err
+	}
+	if r.checkpointStore == nil {
+		rooted, ok := r.eventStore.(interface{ Root() string })
+		if !ok {
+			return Result{}, errors.New("rolling checkpoint store is unavailable")
+		}
+		store, storeErr := checkpoints.NewStore(rooted.Root())
+		if storeErr != nil {
+			return Result{}, storeErr
+		}
+		r.checkpointStore = store
 	}
 
 	writer, err := r.eventStore.AcquireWriter()
 	if err != nil {
 		return Result{}, err
 	}
-	defer func() {
-		_ = writer.Close()
-	}()
+	defer func() { _ = writer.Close() }()
 
+	bootID, err := writer.BootID()
+	if err != nil {
+		return Result{}, err
+	}
 	now := r.now().UTC()
-	stateHash, err := state.Hash()
+
+	records, err := writer.Records()
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read event evidence: %w", err)
+	}
+	latestEvent, hasEvent := latestStateEvent(records, bootID, r.host, r.profile)
+
+	rolling, rollingErr := r.checkpointStore.Read(bootID, r.host, r.profile)
+	hasRolling := rollingErr == nil
+	if rollingErr != nil && !errors.Is(rollingErr, checkpoints.ErrNotFound) && !errors.Is(rollingErr, checkpoints.ErrInvalid) {
+		return Result{}, fmt.Errorf("read rolling checkpoint: %w", rollingErr)
 	}
 
-	lastOffset, err := writer.Append(events.Event{
-		V:         1,
-		TS:        now,
-		Host:      r.host,
-		Profile:   r.profile,
-		EventType: "state_full",
-		State:     stateAsMap(state),
-		Source:    r.source,
-		StateHash: stateHash,
-	})
-	if err != nil {
-		return Result{}, err
+	evidenceHash := ""
+	eventOffset := int64(0)
+	if hasRolling {
+		evidenceHash = rolling.StateHash
+		eventOffset = rolling.EventOffset
+	}
+	// A durable event not represented by the published checkpoint is the
+	// authoritative crash-recovery edge. Timestamp comparison also handles an
+	// event log whose byte offsets changed during retention rewriting.
+	if hasEvent && (!hasRolling || latestEvent.EndOffset > rolling.EventOffset || latestEvent.Event.TS.After(rolling.ObservedAt)) {
+		evidenceHash = latestEvent.Event.StateHash
+		eventOffset = latestEvent.EndOffset
 	}
 
-	r.eventCount++
-	result := Result{EventsWritten: 1, StateHash: stateHash}
-	if snapshots.ShouldSnapshot(r.eventCount, r.snapshotEvery) {
-		snapshotPath, err := r.snapshotStore.Write(snapshots.Snapshot{
-			V:               1,
-			CreatedAt:       now,
-			Host:            r.host,
-			Profile:         r.profile,
-			LastEventOffset: lastOffset,
-			StateHash:       stateHash,
-			State:           stateAsMap(state),
-		})
-		if err != nil {
-			return Result{}, err
-		}
-		result.SnapshotPath = snapshotPath
-	}
-
-	r.lastState = state
-	r.hasLast = true
-	return result, nil
-}
-
-func (r *Runner) captureDiff(ctx context.Context) (Result, error) {
-	state, err := r.collector.Collect(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-
-	before := model.State{}
-	if r.hasLast {
-		before = r.lastState
-	}
-
-	patches, changed, err := r.diffEngine.Diff(before, state)
-	if err != nil {
-		return Result{}, err
-	}
-	if !changed {
-		r.lastState = state
-		r.hasLast = true
-		stateHash, hashErr := state.Hash()
-		if hashErr != nil {
-			return Result{}, hashErr
-		}
-		return Result{StateHash: stateHash}, nil
-	}
-
-	writer, err := r.eventStore.AcquireWriter()
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() {
-		_ = writer.Close()
-	}()
-
-	now := r.now().UTC()
-	stateHash, err := state.Hash()
-	if err != nil {
-		return Result{}, err
-	}
-
-	var lastOffset int64
-	for _, patch := range patches {
-		event := events.Event{
+	result := Result{StateHash: stateHash}
+	if evidenceHash == "" || evidenceHash != stateHash {
+		eventOffset, err = writer.Append(events.Event{
 			V:         1,
 			TS:        now,
 			Host:      r.host,
 			Profile:   r.profile,
+			EventType: "state_full",
+			State:     stateAsMap(state),
 			Source:    r.source,
 			StateHash: stateHash,
-		}
-		if patch.State != nil {
-			event.EventType = "state_full"
-			event.State = stateAsMap(*patch.State)
-		} else {
-			event.EventType = "window_patch"
-			event.WindowKey = patch.WindowKey
-			event.Patch = patch.Fields
-		}
-		lastOffset, err = writer.Append(event)
+		})
 		if err != nil {
 			return Result{}, err
 		}
+		result.EventsWritten = 1
+		r.eventCount++
 	}
 
-	r.eventCount += len(patches)
-	result := Result{EventsWritten: len(patches), StateHash: stateHash}
-	if snapshots.ShouldSnapshot(r.eventCount, r.snapshotEvery) {
+	checkpointPath, err := r.checkpointStore.Write(checkpoints.Checkpoint{
+		V:           checkpoints.SchemaVersion,
+		BootID:      bootID,
+		Host:        r.host,
+		Profile:     r.profile,
+		ObservedAt:  now,
+		State:       state,
+		StateHash:   stateHash,
+		EventOffset: eventOffset,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("publish rolling checkpoint: %w", err)
+	}
+	result.CheckpointPath = checkpointPath
+
+	// Timestamped snapshots remain a compatibility/replay optimization. Their
+	// cadence counts state changes in this Runner; rolling checkpoints are the
+	// process-independent resume mechanism and are refreshed on every success.
+	if result.EventsWritten > 0 && snapshots.ShouldSnapshot(r.eventCount, r.snapshotEvery) && r.snapshotStore != nil {
 		snapshotPath, err := r.snapshotStore.Write(snapshots.Snapshot{
 			V:               1,
 			CreatedAt:       now,
 			Host:            r.host,
 			Profile:         r.profile,
-			LastEventOffset: lastOffset,
+			LastEventOffset: eventOffset,
 			StateHash:       stateHash,
 			State:           stateAsMap(state),
 		})
@@ -226,10 +208,17 @@ func (r *Runner) captureDiff(ctx context.Context) (Result, error) {
 		}
 		result.SnapshotPath = snapshotPath
 	}
-
-	r.lastState = state
-	r.hasLast = true
 	return result, nil
+}
+
+func (r *Runner) captureStateFull(ctx context.Context) (Result, error) {
+	return r.CaptureOnce(ctx)
+}
+
+// captureDiff remains for existing callers but now uses the same complete,
+// change-only, boot-aware transaction as one-shot capture.
+func (r *Runner) captureDiff(ctx context.Context) (Result, error) {
+	return r.CaptureOnce(ctx)
 }
 
 func (r *Runner) CaptureRun(ctx context.Context, ticks <-chan time.Time) error {
@@ -241,11 +230,21 @@ func (r *Runner) CaptureRun(ctx context.Context, ticks <-chan time.Time) error {
 			if !ok {
 				return nil
 			}
-			if _, err := r.captureDiff(ctx); err != nil {
+			if _, err := r.CaptureOnce(ctx); err != nil {
 				_, _ = fmt.Fprintf(r.logger, "capture_once_error err=%q\n", err.Error())
 			}
 		}
 	}
+}
+
+func latestStateEvent(records []events.Record, bootID, host, profile string) (events.Record, bool) {
+	for i := len(records) - 1; i >= 0; i-- {
+		event := records[i].Event
+		if event.EventType == "state_full" && strings.TrimSpace(event.BootID) == bootID && event.Host == host && event.Profile == profile {
+			return records[i], true
+		}
+	}
+	return events.Record{}, false
 }
 
 func stateAsMap(state model.State) map[string]any {

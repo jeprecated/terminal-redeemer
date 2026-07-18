@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/niri"
@@ -157,6 +158,24 @@ func (c EventsIntegrityCheck) Run(_ context.Context) Result {
 	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d events)", len(decoded))}
 }
 
+type CheckpointsIntegrityCheck struct {
+	StateDir string
+}
+
+func (c CheckpointsIntegrityCheck) Name() string { return "checkpoints_integrity" }
+
+func (c CheckpointsIntegrityCheck) Run(_ context.Context) Result {
+	valid, issues, err := checkpoints.List(c.StateDir)
+	if err != nil {
+		return Result{Name: c.Name(), Status: StatusFail, Detail: err.Error()}
+	}
+	if len(issues) > 0 {
+		issue := issues[0]
+		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("invalid %s: %v (resume will use valid rolling/event fallback)", filepath.Base(issue.Path), issue.Err)}
+	}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("readable and valid (%d rolling checkpoints)", len(valid))}
+}
+
 type SnapshotsIntegrityCheck struct {
 	StateDir string
 	ReadDir  func(name string) ([]os.DirEntry, error)
@@ -261,12 +280,12 @@ func (c StatePathsCheck) Run(_ context.Context) Result {
 		if _, parentErr := stat(parent); parentErr != nil {
 			return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stateDir %s is absent and parent %s is unavailable: %v", stateDir, parent, parentErr)}
 		}
-		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s snapshots=%s (no captures yet)", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "snapshots"))}
+		return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s checkpoints=%s snapshots=%s (no captures yet)", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "checkpoints"), filepath.Join(stateDir, "snapshots"))}
 	}
 	if !info.IsDir() {
 		return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("stateDir %s is not a directory", stateDir)}
 	}
-	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s snapshots=%s", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "snapshots"))}
+	return Result{Name: c.Name(), Status: StatusPass, Detail: fmt.Sprintf("state_dir=%s events=%s checkpoints=%s snapshots=%s", stateDir, filepath.Join(stateDir, "events.jsonl"), filepath.Join(stateDir, "checkpoints"), filepath.Join(stateDir, "snapshots"))}
 }
 
 type BootIDCheck struct {

@@ -19,9 +19,9 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/bootid"
 	"github.com/jmo/terminal-redeemer/internal/capture"
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/collector"
 	"github.com/jmo/terminal-redeemer/internal/config"
-	"github.com/jmo/terminal-redeemer/internal/diff"
 	"github.com/jmo/terminal-redeemer/internal/doctor"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
@@ -117,6 +117,7 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 		doctor.StartupServiceCheck{Enabled: resolvedConfig.Restore.OnStartup},
 		doctor.LocalInstallCheck{Path: localInstallPath()},
 		doctor.EventsIntegrityCheck{StateDir: resolvedConfig.StateDir},
+		doctor.CheckpointsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 		doctor.SnapshotsIntegrityCheck{StateDir: resolvedConfig.StateDir},
 	}
 	if strings.TrimSpace(resolvedConfig.Mirror.SourceHost) != "" {
@@ -595,7 +596,7 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return 1
 	}
 
-	checkpoints, err := replay.ListCheckpoints(*stateDir)
+	resumeCheckpoints, err := replay.ListResumeCheckpoints(*stateDir)
 	if err != nil {
 		writef(stderr, "resume checkpoint scan failed: %v\n", err)
 		return 1
@@ -605,10 +606,10 @@ func runResume(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		writef(stderr, "resume boot ID failed: %v\n", err)
 		return 1
 	}
-	selection := resume.Select(checkpoints, resume.SelectOptions{
+	selection := resume.Select(resumeCheckpoints, resume.SelectOptions{
 		CurrentBootID: currentBootID,
-		Host:          resolvedConfig.Host,
-		Profile:       resolvedConfig.Profile,
+		Host:          strings.TrimSpace(resolvedConfig.Host),
+		Profile:       strings.TrimSpace(resolvedConfig.Profile),
 		Now:           time.Now().UTC(),
 		MaxAge:        *maxAge,
 	})
@@ -1011,7 +1012,7 @@ func runPrune(args []string, resolvedConfig config.Config, stdout io.Writer, std
 		writef(stderr, "prune run failed: %v\n", err)
 		return 1
 	}
-	writef(stdout, "prune_summary events_pruned=%d snapshots_pruned=%d\n", summary.EventsPruned, summary.SnapshotsPruned)
+	writef(stdout, "prune_summary events_pruned=%d checkpoints_pruned=%d snapshots_pruned=%d\n", summary.EventsPruned, summary.CheckpointsPruned, summary.SnapshotsPruned)
 	return 0
 }
 
@@ -1303,6 +1304,9 @@ func runCaptureOnce(args []string, resolvedConfig config.Config, stdout io.Write
 	}
 
 	writef(stdout, "events_written=%d state_hash=%s\n", result.EventsWritten, result.StateHash)
+	if result.CheckpointPath != "" {
+		writef(stdout, "checkpoint=%s\n", result.CheckpointPath)
+	}
 	if result.SnapshotPath != "" {
 		writef(stdout, "snapshot=%s\n", result.SnapshotPath)
 	}
@@ -1381,6 +1385,10 @@ func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	checkpointStore, err := checkpoints.NewStore(cfg.stateDir)
+	if err != nil {
+		return nil, err
+	}
 	snapshotStore, err := snapshots.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, err
@@ -1401,15 +1409,15 @@ func buildCaptureRunner(cfg captureBuildConfig) (*capture.Runner, error) {
 	stateCollector := collector.New(snapshotter, enricher)
 
 	return capture.NewRunner(capture.Config{
-		Collector:     stateCollector,
-		DiffEngine:    diff.NewEngine(),
-		EventStore:    eventStore,
-		SnapshotStore: snapshotStore,
-		SnapshotEvery: cfg.snapshotEvery,
-		Host:          cfg.host,
-		Profile:       cfg.profile,
-		Source:        "capture.cli",
-		Logger:        cfg.stderr,
+		Collector:       stateCollector,
+		EventStore:      eventStore,
+		CheckpointStore: checkpointStore,
+		SnapshotStore:   snapshotStore,
+		SnapshotEvery:   cfg.snapshotEvery,
+		Host:            cfg.host,
+		Profile:         cfg.profile,
+		Source:          "capture.cli",
+		Logger:          cfg.stderr,
 	}), nil
 }
 
@@ -1504,7 +1512,7 @@ func printHelp(w io.Writer) {
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
-	writeln(w, "  prune     Prune old events/snapshots")
+	writeln(w, "  prune     Prune old events/checkpoints/snapshots")
 	writeln(w, "  bottle    Bottle workflows (V2)")
 	writeln(w, "  doctor    Read-only capture/resume diagnostics")
 	writeln(w)

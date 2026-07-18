@@ -4,7 +4,7 @@
 
 ## Product model
 
-- **Restore dead sessions:** capture Niri state, inspect historical state, and recreate local applications and Zellij terminals. Existing capture/history/restore/prune behavior is unchanged; restore preserves the captured terminal CWD.
+- **Restore dead sessions:** query complete Niri and terminal state on every capture, append history only when normalized state changes, and recreate local applications and Zellij terminals. A crash-durable rolling checkpoint per boot tracks the latest successful observation; restore preserves the captured terminal CWD.
 - **Mirror live sessions:** obtain another host's `redeem mirror snapshot` over SSH, discover its live Kitty/Zellij windows, and open local Kitty windows attached to or watching those remote sessions.
 
 Mirroring is an explicit CLI action, not a continuous synchronization daemon. Host names are configuration values; no host identity is built in.
@@ -20,7 +20,7 @@ redeem restore tui
 redeem restore apply --at 10m --dry-run
 ```
 
-Manual `redeem resume` is the distributed default. It restores attachable Zellij terminals only; arbitrary GUI applications remain outside its default scope. `restore apply` requires `--at`. Without `--yes` it previews; with `--yes` it executes. `restore tui` provides interactive timestamp/item selection.
+Manual `redeem resume` is the distributed default. It restores attachable Zellij terminals only; arbitrary GUI applications remain outside its default scope. Resume merges rolling prior-boot checkpoints with boot-aware event fallback, while `restore apply`/`restore tui` retain access to legacy and timestamped history. `restore apply` requires `--at`. Without `--yes` it previews; with `--yes` it executes.
 
 ## Optional startup resume
 

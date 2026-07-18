@@ -871,10 +871,10 @@ func TestDoctorPassExitCode(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d output=%q", code, out.String())
 	}
-	if !strings.Contains(out.String(), "doctor_summary total=11 passed=11 failed=0") {
+	if !strings.Contains(out.String(), "doctor_summary total=12 passed=12 failed=0") {
 		t.Fatalf("unexpected doctor summary: %q", out.String())
 	}
-	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service"} {
+	for _, name := range []string{"boot_id", "state_paths", "niri_readiness", "resume_launcher", "zellij_listing", "resume_policy", "startup_service", "checkpoints_integrity"} {
 		if !strings.Contains(out.String(), "doctor_check name="+name+" status=pass") {
 			t.Fatalf("doctor output missing passing %s check: %q", name, out.String())
 		}

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/events"
 	"github.com/jmo/terminal-redeemer/internal/storelock"
 )
@@ -24,8 +25,9 @@ type Runner struct {
 }
 
 type Summary struct {
-	EventsPruned    int
-	SnapshotsPruned int
+	EventsPruned      int
+	CheckpointsPruned int
+	SnapshotsPruned   int
 }
 
 func NewRunner(root string, days int, now func() time.Time) *Runner {
@@ -50,12 +52,16 @@ func (r *Runner) Run() (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	checkpointsPruned, err := checkpoints.Prune(r.root, cutoff)
+	if err != nil {
+		return Summary{}, err
+	}
 	snapshotsPruned, err := r.pruneSnapshots(cutoff)
 	if err != nil {
 		return Summary{}, err
 	}
 
-	return Summary{EventsPruned: eventsPruned, SnapshotsPruned: snapshotsPruned}, nil
+	return Summary{EventsPruned: eventsPruned, CheckpointsPruned: checkpointsPruned, SnapshotsPruned: snapshotsPruned}, nil
 }
 
 func (r *Runner) pruneEvents(cutoff time.Time) (int, error) {

@@ -9,7 +9,7 @@ History restore and live mirroring are separate paths. Live mirroring currently 
 - source-side Zellij
 - `wl-paste`, `scp`, and Kitty remote control when the image bridge is enabled
 
-Commands are configurable. `redeem doctor` is read-only: it does not create the state directory or write probe files. It reports config validity; Linux boot ID; exact state/events/snapshot paths and integrity; live Niri socket/query readiness (or an offline `REDEEM_NIRI_FIXTURE`); direct Kitty launcher availability and PID-correlation assumptions; Zellij executable/listing behavior; configured checkpoint-age/workspace/startup/capture policy; startup-service enablement when requested; and local-install shadowing. When `mirror.sourceHost` is configured it additionally checks mirror SSH, launcher, Niri, and enabled clipboard/SCP executables. Doctor does not connect to the source.
+Commands are configurable. `redeem doctor` is read-only: it does not create the state directory or write probe files. It reports config validity; Linux boot ID; exact state/event/rolling-checkpoint/timestamped-snapshot paths and integrity; live Niri socket/query readiness (or an offline `REDEEM_NIRI_FIXTURE`); direct Kitty launcher availability and PID-correlation assumptions; Zellij executable/listing behavior; configured checkpoint-age/workspace/startup/capture policy; startup-service enablement when requested; and local-install shadowing. A corrupt rolling checkpoint fails its doctor check, but resume still falls back to valid boot-aware event evidence. When `mirror.sourceHost` is configured doctor additionally checks mirror SSH, launcher, Niri, and enabled clipboard/SCP executables. Doctor does not connect to the source.
 
 A failed required check makes doctor exit 1. Disabled optional startup automation is a passing informational result, not a prerequisite failure. Use a valid Niri fixture to test doctor without a compositor; live mode requires `NIRI_SOCKET` and a successful windows/workspaces query.
 
@@ -18,6 +18,10 @@ A non-Niri compositor cannot provide owned-window status/close. A non-Kitty laun
 ## Home Manager and NixOS
 
 Enable `programs.terminal-redeemer.enable = true`. Home Manager writes `~/.config/terminal-redeemer/config.yaml`, installs the selected package, and optionally manages capture/prune timers. The capture timer starts and stops with `graphical-session.target`, waits one configured interval before its first activation, and repeats every configured interval while the graphical session is active. Its default interval is 60 seconds (`capture.interval = "60s"`). Each activation runs the same `redeem capture once` full reconciliation available to operators. A failed Niri windows/workspaces query exits the oneshot visibly in the user journal without appending a partial checkpoint; the next timer activation retries from a fresh full query.
+
+A successful activation always runs the complete Niri windows/workspaces query and terminal metadata enrichment. History is change-only: the first success in a boot appends one `state_full`, and later same-boot successes append only when normalized state changes. Regardless of whether an event is appended, each success replaces that boot/host/profile's rolling file under `stateDir/checkpoints/`, so a quiet desktop still gets a fresh observation every 60 seconds by default. `events.jsonl` remains append-only between prune runs; `snapshots/` remains the older timestamped replay optimization.
+
+Event append and rolling replacement share the repository's advisory writer lock. A changed event is flushed before checkpoint publication. Checkpoint replacement writes and fsyncs a mode-0600 temporary file, atomically renames it, then fsyncs `checkpoints/`. If power fails after the event flush but before publication, the next unchanged capture recognizes the newer event, repairs the checkpoint, and does not append a duplicate.
 
 The NixOS wrapper requires the Home Manager NixOS module and forwards `programs.terminal-redeemer.users.<name>`. Home Manager, not a system service, owns graphical startup resume.
 
@@ -108,7 +112,7 @@ redeem resume --dry-run  # selection and reconciliation only
 redeem resume            # apply the same plan
 ```
 
-The dry run is non-mutating: it reads complete checkpoints, current Niri workspaces/windows and process metadata, and `zellij list-sessions --short`; it never attaches, creates, launches, or moves anything. Output starts with the selected prior boot ID and capture time, followed by stable `resume_item` records and a status-count summary.
+The dry run is non-mutating: it reads rolling checkpoints plus boot-aware full-state event fallback, current Niri workspaces/windows and process metadata, and `zellij list-sessions --short`; it never attaches, creates, launches, or moves anything. Per prior boot, rolling `observed_at` normally controls freshness; a newer event covers an event-to-checkpoint crash boundary. Corrupt/missing rolling files fall back safely. Output starts with the selected prior boot ID and latest successful observation time, followed by stable `resume_item` records and a status-count summary.
 
 Candidate statuses are:
 
@@ -147,7 +151,7 @@ An `already_open` result comes from a current terminal with the same verified Ze
 
 ## Retention, migration, and rollback
 
-Resume can only select history that capture retained. `retention.days` and prune therefore bound the reboot recovery horizon independently of `restore.maxCheckpointAge`; choose retention longer than the maximum acceptable resume age. A short retention window may produce `not_found`, while an old retained candidate produces `stale`. An `empty` newest prior boot is authoritative and does not fall back. Before reboot testing, run `redeem capture once`, then verify `redeem resume --dry-run` after the boot.
+Resume can only select history that capture retained. `retention.days` and prune therefore bound the reboot recovery horizon independently of `restore.maxCheckpointAge`; choose retention longer than the maximum acceptable resume age. Prune holds the same writer lock, crash-safely removes rolling checkpoints whose `observed_at` is older than its cutoff, and applies the existing event/timestamped-snapshot retention rules. A short retention window may produce `not_found`, while an old retained event fallback may produce `stale`. An `empty` newest prior boot is authoritative and does not fall back. Before reboot testing, run `redeem capture once`, then verify `redeem resume --dry-run` after the boot.
 
 Migrate one owner at a time:
 
@@ -177,7 +181,7 @@ redeem restore tui
 redeem prune run --days 30
 ```
 
-Replay and `doctor` both ignore one malformed trailing event after a crash (doctor emits a non-failing note), but report corruption if a malformed record appears before a later record. Snapshots remain an optional optimization. Capture and prune coordinate through a crash-recoverable advisory lock; a leftover `meta/lock` file is harmless, while prune still reports an active writer when the lock is held.
+Replay and `doctor` both ignore one malformed trailing event after a crash (doctor emits a non-failing note), but report corruption if a malformed record appears before a later record. Timestamped snapshots remain an optional explicit-history optimization and are not the process-independent rolling resume mechanism. Bootless events and existing snapshots are never migrated or rewritten merely by capture and remain available to explicit historical restore. Capture and prune coordinate through a crash-recoverable advisory lock; a leftover `meta/lock` file is harmless, while prune still reports an active writer when the lock is held.
 
 ## Deferred work
 

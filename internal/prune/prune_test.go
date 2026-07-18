@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 )
 
@@ -56,6 +58,20 @@ func TestAgeBasedPruningEventsAndSnapshots(t *testing.T) {
 	if _, err := snapStore.Write(snapshots.Snapshot{V: 1, CreatedAt: newTS, Host: "host-a", Profile: "default", LastEventOffset: 20, StateHash: "sha256:b", State: map[string]any{"windows": []any{}}}); err != nil {
 		t.Fatalf("write new snapshot: %v", err)
 	}
+	rolling, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := model.State{Workspaces: []model.Workspace{}, Windows: []model.Window{}}
+	emptyHash, _ := empty.Hash()
+	for _, checkpoint := range []checkpoints.Checkpoint{
+		{V: 1, BootID: "boot-old", Host: "host-a", Profile: "default", ObservedAt: oldTS, State: empty, StateHash: emptyHash, EventOffset: 10},
+		{V: 1, BootID: "boot-new", Host: "host-a", Profile: "default", ObservedAt: newTS, State: empty, StateHash: emptyHash, EventOffset: 20},
+	} {
+		if _, err := rolling.Write(checkpoint); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_ = writer.Close()
 
 	runner := NewRunner(root, 30, func() time.Time { return now })
@@ -63,7 +79,7 @@ func TestAgeBasedPruningEventsAndSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prune run: %v", err)
 	}
-	if summary.EventsPruned == 0 || summary.SnapshotsPruned == 0 {
+	if summary.EventsPruned == 0 || summary.CheckpointsPruned != 1 || summary.SnapshotsPruned == 0 {
 		t.Fatalf("expected old data pruned, got %+v", summary)
 	}
 }
