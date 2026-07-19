@@ -4,7 +4,7 @@
 
 ## Product model
 
-- **Restore dead sessions:** query complete Niri and terminal state on every capture, append history only when normalized state changes, and recreate local applications and Zellij terminals. A crash-durable rolling checkpoint per boot tracks the latest successful observation; restore preserves the captured terminal CWD.
+- **Restore dead sessions:** query complete Niri and terminal state on every capture, append history only when restore-relevant normalized state changes (not volatile window titles), and recreate local applications and Zellij terminals. A crash-durable rolling checkpoint per boot tracks the latest successful observation; restore preserves the captured terminal CWD.
 - **Mirror live sessions:** obtain another host's `redeem mirror snapshot` over SSH, discover its live Kitty/Zellij windows, and open local Kitty windows attached to or watching those remote sessions.
 
 Mirroring is an explicit CLI action, not a continuous synchronization daemon. Host names are configuration values; no host identity is built in.

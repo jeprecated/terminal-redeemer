@@ -36,6 +36,10 @@ type Checkpoint struct {
 }
 
 func (c Checkpoint) Validate() error {
+	return c.validate(false)
+}
+
+func (c Checkpoint) validate(allowLegacyTitleHash bool) error {
 	if c.V != SchemaVersion {
 		return fmt.Errorf("schema version is %d, want %d", c.V, SchemaVersion)
 	}
@@ -62,6 +66,15 @@ func (c Checkpoint) Validate() error {
 		return fmt.Errorf("hash state: %w", err)
 	}
 	if hash != c.StateHash {
+		if allowLegacyTitleHash {
+			legacyHash, legacyErr := c.State.HashWithTitles()
+			if legacyErr != nil {
+				return fmt.Errorf("hash legacy state: %w", legacyErr)
+			}
+			if legacyHash == c.StateHash {
+				return nil
+			}
+		}
 		return fmt.Errorf("state_hash mismatch: got %q want %q", c.StateHash, hash)
 	}
 	return nil
@@ -130,7 +143,7 @@ func readPath(path string) (Checkpoint, error) {
 		return Checkpoint{}, fmt.Errorf("%w: decode %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	checkpoint.State = model.Normalize(checkpoint.State)
-	if err := checkpoint.Validate(); err != nil {
+	if err := checkpoint.validate(true); err != nil {
 		return Checkpoint{}, fmt.Errorf("%w: validate %s: %v", ErrInvalid, filepath.Base(path), err)
 	}
 	return checkpoint, nil

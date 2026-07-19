@@ -140,8 +140,8 @@ func TestCaptureRunLoopsAndContinuesOnRecoverableErrors(t *testing.T) {
 		t.Fatalf("new snapshot store: %v", err)
 	}
 
-	stateA := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "a"}}}
-	stateB := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "b"}}}
+	stateA := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "a", PID: 1}}}
+	stateB := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "b", PID: 2}}}
 
 	var logs bytes.Buffer
 	collector := &sequenceCollector{sequence: []collectResult{{state: stateA}, {err: errors.New("temporary niri error")}, {state: stateB}}}
@@ -259,9 +259,9 @@ func TestSnapshotCadenceHonored(t *testing.T) {
 		t.Fatalf("new snapshot store: %v", err)
 	}
 
-	stateA := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "a"}}}
-	stateB := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "b"}}}
-	stateC := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "c"}}}
+	stateA := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "a", PID: 1}}}
+	stateB := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "b", PID: 2}}}
+	stateC := model.State{Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}}, Windows: []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "c", PID: 3}}}
 
 	collector := &sequenceCollector{states: []model.State{stateA, stateB, stateC}}
 	runner := NewRunner(Config{

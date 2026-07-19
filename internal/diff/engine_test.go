@@ -27,16 +27,16 @@ func TestUnchangedStateEmitsNoPatches(t *testing.T) {
 	}
 }
 
-func TestSingleFieldChangeEmitsSparsePatch(t *testing.T) {
+func TestSingleSemanticFieldChangeEmitsSparsePatch(t *testing.T) {
 	t.Parallel()
 
 	before := model.State{
 		Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}},
-		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "old title"}},
+		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "old title", PID: 1}},
 	}
 	after := model.State{
 		Workspaces: []model.Workspace{{ID: "ws-1", Index: 1}},
-		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "new title"}},
+		Windows:    []model.Window{{Key: "w-1", AppID: "kitty", WorkspaceID: "ws-1", Title: "new title", PID: 2}},
 	}
 
 	engine := NewEngine()
@@ -55,11 +55,25 @@ func TestSingleFieldChangeEmitsSparsePatch(t *testing.T) {
 	if patch.WindowKey != "w-1" {
 		t.Fatalf("expected patch for w-1, got %q", patch.WindowKey)
 	}
-	if len(patch.Fields) != 1 {
-		t.Fatalf("expected sparse patch with one field, got %#v", patch.Fields)
+	if len(patch.Fields) != 2 {
+		t.Fatalf("expected sparse patch with changed fields, got %#v", patch.Fields)
 	}
-	if patch.Fields["title"] != "new title" {
-		t.Fatalf("expected title patch, got %#v", patch.Fields)
+	if patch.Fields["pid"] != 2 || patch.Fields["title"] != "new title" {
+		t.Fatalf("expected PID and latest title patch, got %#v", patch.Fields)
+	}
+}
+
+func TestTitleOnlyChangeEmitsNoPatch(t *testing.T) {
+	t.Parallel()
+
+	before := model.State{Windows: []model.Window{{Key: "w-1", AppID: "kitty", Title: "spinner ⠐"}}}
+	after := model.State{Windows: []model.Window{{Key: "w-1", AppID: "kitty", Title: "spinner ⠂"}}}
+	patches, changed, err := NewEngine().Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || len(patches) != 0 {
+		t.Fatalf("title-only diff should be suppressed: changed=%v patches=%#v", changed, patches)
 	}
 }
 

@@ -73,6 +73,38 @@ func TestUnchangedSuppressionAcrossIndependentRunners(t *testing.T) {
 	}
 }
 
+func TestTitleOnlyChangeSuppressesEventAndRefreshesStoredTitle(t *testing.T) {
+	root := t.TempDir()
+	boot := func() (string, error) { return "boot-a", nil }
+	eventStore, err := events.NewStoreWithBootIDSource(root, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolling, err := checkpoints.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
+	if result, err := runnerFor(captureState("running ⠐"), eventStore, rolling, func() time.Time { return now }).CaptureOnce(context.Background()); err != nil || result.EventsWritten != 1 {
+		t.Fatalf("first capture result=%#v err=%v", result, err)
+	}
+	later := now.Add(time.Minute)
+	if result, err := runnerFor(captureState("running ⠂"), eventStore, rolling, func() time.Time { return later }).CaptureOnce(context.Background()); err != nil || result.EventsWritten != 0 {
+		t.Fatalf("title-only capture result=%#v err=%v", result, err)
+	}
+	recorded, _, err := eventStore.ReadSince(0)
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("events=%#v err=%v", recorded, err)
+	}
+	checkpoint, err := rolling.Read("boot-a", "host", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !checkpoint.ObservedAt.Equal(later) || checkpoint.State.Windows[0].Title != "running ⠂" {
+		t.Fatalf("rolling checkpoint did not retain latest observation: %#v", checkpoint)
+	}
+}
+
 func TestFirstCapturePerBootAndChangedOrEmptyState(t *testing.T) {
 	root := t.TempDir()
 	currentBoot := "boot-a"
@@ -87,7 +119,9 @@ func TestFirstCapturePerBootAndChangedOrEmptyState(t *testing.T) {
 	}
 	now := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
 	stateA := captureState("a")
-	for _, state := range []model.State{stateA, captureState("b"), {Workspaces: []model.Workspace{}, Windows: []model.Window{}}} {
+	stateB := captureState("b")
+	stateB.Windows[0].PID = 42
+	for _, state := range []model.State{stateA, stateB, {Workspaces: []model.Workspace{}, Windows: []model.Window{}}} {
 		result, err := runnerFor(state, eventStore, rolling, func() time.Time { now = now.Add(time.Minute); return now }).CaptureOnce(context.Background())
 		if err != nil || result.EventsWritten != 1 {
 			t.Fatalf("changed capture result=%#v err=%v", result, err)

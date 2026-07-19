@@ -1,6 +1,7 @@
 package checkpoints
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,6 +19,41 @@ func testCheckpoint(t *testing.T, boot, host, profile string, observed time.Time
 		t.Fatal(err)
 	}
 	return Checkpoint{V: SchemaVersion, BootID: boot, Host: host, Profile: profile, ObservedAt: observed, State: state, StateHash: hash, EventOffset: offset}
+}
+
+func TestReadAcceptsLegacyTitleSensitiveHash(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := model.State{Windows: []model.Window{{Key: "w-1", AppID: "kitty", Title: "legacy title"}}}
+	legacyHash, err := state.HashWithTitles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := Checkpoint{
+		V: SchemaVersion, BootID: "boot-old", Host: "host", Profile: "default",
+		ObservedAt: time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC), State: state,
+		StateHash: legacyHash, EventOffset: 10,
+	}
+	if err := checkpoint.Validate(); err == nil {
+		t.Fatal("new writes must reject the legacy title-sensitive hash")
+	}
+	payload, err := json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(checkpoint.BootID, checkpoint.Host, checkpoint.Profile), append(payload, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Read(checkpoint.BootID, checkpoint.Host, checkpoint.Profile)
+	if err != nil {
+		t.Fatalf("read legacy checkpoint: %v", err)
+	}
+	if got.StateHash != legacyHash || got.State.Windows[0].Title != "legacy title" {
+		t.Fatalf("legacy checkpoint changed: %#v", got)
+	}
 }
 
 func TestStoreRoundTripAndIdentityPaths(t *testing.T) {
