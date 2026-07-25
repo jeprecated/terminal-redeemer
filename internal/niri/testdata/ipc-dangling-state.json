@@ -1,0 +1,42 @@
+{
+  "outputs": {
+    "winit": {
+      "name": "winit",
+      "logical": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080,
+        "scale": 1.0,
+        "transform": "Normal"
+      }
+    }
+  },
+  "workspaces": [
+    {
+      "id": 1,
+      "idx": 1,
+      "name": "dev",
+      "output": "disconnected-output",
+      "is_active": true,
+      "is_focused": true,
+      "active_window_id": 42
+    }
+  ],
+  "windows": [
+    {
+      "id": 42,
+      "title": "project",
+      "app_id": "kitty",
+      "pid": 4242,
+      "workspace_id": 999,
+      "is_focused": true,
+      "is_floating": false,
+      "layout": {
+        "pos_in_scrolling_layout": [1, 1],
+        "tile_size": [900.0, 700.0],
+        "window_size": [900, 700]
+      }
+    }
+  ]
+}

@@ -1,18 +1,30 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/events"
+	"github.com/jmo/terminal-redeemer/internal/niriipc"
 	"github.com/jmo/terminal-redeemer/internal/replay"
 	"github.com/jmo/terminal-redeemer/internal/resume"
+	"github.com/jmo/terminal-redeemer/internal/slicecontroller"
+	"github.com/jmo/terminal-redeemer/internal/sliceenv"
+	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
+	"github.com/jmo/terminal-redeemer/internal/slicerpc"
 )
 
 func TestHelpByDefault(t *testing.T) {
@@ -65,6 +77,8 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
+		{name: "slice inventory init", args: []string{"slice", "inventory", "init", "--help"}},
+		{name: "slice inventory snapshot", args: []string{"slice", "inventory", "snapshot", "--help"}},
 		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
 		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
 		{name: "resume", args: []string{"resume", "--help"}},
@@ -896,14 +910,19 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	}
 	var out bytes.Buffer
 	var stderr bytes.Buffer
-	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--host", "source", "--all", "--dry-run", "--no-clipboard", "--mode", "watch"}, &out, &stderr)
+	code := run([]string{"mirror", "open", "--snapshot-file", snapshotPath, "--host", "source", "--all", "--dry-run", "--no-clipboard", "--mode", "attach"}, &out, &stderr)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, part := range []string{"'kitty'", "'source[0]: work'", "'ssh'", "'watch'", "'session-a'", "'/tmp/project'"} {
+	for _, part := range []string{"'kitty'", "'source[0]: work'", "'ssh'", "'attach'", "'session-a'", "'/tmp/project'"} {
 		if !strings.Contains(out.String(), part) {
 			t.Fatalf("dry-run missing %q: %s", part, out.String())
 		}
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"mirror", "open", "--mode", "watch"}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "unsupported by pinned Zellij") {
+		t.Fatalf("watch code=%d stderr=%q", code, stderr.String())
 	}
 }
 
@@ -1067,4 +1086,593 @@ func stderrWithoutWarning(s string) string {
 		lines = append(lines, line)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func TestSliceInventoryInitAndVersionNegotiation(t *testing.T) {
+	root := t.TempDir()
+	var out, stderr bytes.Buffer
+	code := run([]string{"slice", "inventory", "init", "--state-dir", root}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("init code=%d stderr=%s", code, stderr.String())
+	}
+	var initialized struct {
+		SchemaVersion uint32 `json:"schema_version"`
+		SourceHostID  string `json:"source_host_id"`
+		Initialized   bool   `json:"initialized"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &initialized); err != nil {
+		t.Fatal(err)
+	}
+	if initialized.SchemaVersion != 1 || initialized.SourceHostID == "" || !initialized.Initialized {
+		t.Fatalf("unexpected init output: %+v", initialized)
+	}
+	if _, err := os.Stat(filepath.Join(root, "slice", "source-inventory", "current.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	stderr.Reset()
+	code = run([]string{"slice", "inventory", "snapshot", "--state-dir", root, "--accept-schema-version", "99"}, &out, &stderr)
+	if code != 2 {
+		t.Fatalf("negotiation code=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(out.String(), `"unsupported_schema_version"`) || !strings.Contains(out.String(), `"supported_schema_versions"`) {
+		t.Fatalf("unexpected negotiation output: %s", out.String())
+	}
+}
+
+func TestSliceInventoryInitRefusesOverwrite(t *testing.T) {
+	root := t.TempDir()
+	var out, stderr bytes.Buffer
+	if code := run([]string{"slice", "inventory", "init", "--state-dir", root}, &out, &stderr); code != 0 {
+		t.Fatalf("first init=%d %s", code, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "inventory", "init", "--state-dir", root}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "already initialized") {
+		t.Fatalf("second init=%d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestSliceInventorySnapshotJSONAndErrorContractsHermetic(t *testing.T) {
+	original := collectSliceInventorySnapshot
+	defer func() { collectSliceInventorySnapshot = original }()
+	initRoot := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		var out, stderr bytes.Buffer
+		if code := run([]string{"slice", "inventory", "init", "--state-dir", root}, &out, &stderr); code != 0 {
+			t.Fatalf("init=%d stderr=%s", code, stderr.String())
+		}
+		return root
+	}
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	host := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	t.Run("complete", func(t *testing.T) {
+		root := initRoot(t)
+		authority := sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{}, Sources: []sliceprotocol.Source{}, Conflicts: []sliceprotocol.Conflict{}}
+		collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
+			return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &authority}, nil
+		}
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root}, &out, &stderr)
+		if code != 0 {
+			t.Fatalf("code=%d stderr=%s", code, stderr.String())
+		}
+		envelope, err := sliceprotocol.Decode(bytes.NewReader(out.Bytes()))
+		if err != nil || envelope.Observation.Quality != sliceprotocol.QualityComplete || envelope.Authoritative.Revision != 1 {
+			t.Fatalf("complete JSON=%s err=%v", out.String(), err)
+		}
+	})
+	t.Run("degraded", func(t *testing.T) {
+		root := initRoot(t)
+		collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
+			return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: host, Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityDegraded, AttemptedAt: now, DegradedReasons: []sliceprotocol.Reason{{Code: sliceprotocol.ReasonZellijCatalogUnavailable}}}}, nil
+		}
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root}, &out, &stderr)
+		if code != 0 {
+			t.Fatalf("code=%d stderr=%s", code, stderr.String())
+		}
+		envelope, err := sliceprotocol.Decode(bytes.NewReader(out.Bytes()))
+		if err != nil || envelope.Observation.Quality != sliceprotocol.QualityDegraded || envelope.Authoritative != nil {
+			t.Fatalf("degraded JSON=%s err=%v", out.String(), err)
+		}
+	})
+	t.Run("collector error", func(t *testing.T) {
+		root := initRoot(t)
+		collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
+			return sliceprotocol.Envelope{}, errors.New("typed authority unavailable")
+		}
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root}, &out, &stderr)
+		if code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "slice inventory snapshot failed") {
+			t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+		}
+	})
+	collectSliceInventorySnapshot = original
+	t.Run("missing initialization", func(t *testing.T) {
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", t.TempDir(), "--niri-socket", ""}, &out, &stderr)
+		if code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "enrollment marker is missing") {
+			t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+		}
+	})
+	t.Run("missing authority after enrollment", func(t *testing.T) {
+		root := initRoot(t)
+		if err := os.Remove(filepath.Join(root, "slice", "source-inventory", "current.json")); err != nil {
+			t.Fatal(err)
+		}
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root, "--niri-socket", ""}, &out, &stderr)
+		if code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "source inventory state not found") {
+			t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+		}
+	})
+	t.Run("corrupt authority", func(t *testing.T) {
+		root := initRoot(t)
+		if err := os.WriteFile(filepath.Join(root, "slice", "source-inventory", "current.json"), []byte("{bad"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, stderr bytes.Buffer
+		code := run([]string{"slice", "inventory", "snapshot", "--state-dir", root, "--niri-socket", ""}, &out, &stderr)
+		if code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "source inventory state invalid") {
+			t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+		}
+	})
+}
+
+func TestSliceInventoryNegotiationPrecedesObservation(t *testing.T) {
+	original := collectSliceInventorySnapshot
+	defer func() { collectSliceInventorySnapshot = original }()
+	called := false
+	collectSliceInventorySnapshot = func(context.Context, sliceInventorySnapshotOptions) (sliceprotocol.Envelope, error) {
+		called = true
+		return sliceprotocol.Envelope{}, errors.New("must not run")
+	}
+	var out, stderr bytes.Buffer
+	code := run([]string{"slice", "inventory", "snapshot", "--accept-schema-version", "99"}, &out, &stderr)
+	if code != 2 || called || !strings.Contains(out.String(), "unsupported_schema_version") {
+		t.Fatalf("code=%d called=%v out=%s stderr=%s", code, called, out.String(), stderr.String())
+	}
+}
+
+type neverEOFReadCloser struct {
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (reader *neverEOFReadCloser) Read([]byte) (int, error) { <-reader.closed; return 0, os.ErrClosed }
+func (reader *neverEOFReadCloser) Close() error {
+	reader.once.Do(func() { close(reader.closed) })
+	return nil
+}
+func TestSliceRPCRequestTimeoutIncludesStdinIngestion(t *testing.T) {
+	original := sliceRPCInput
+	defer func() { sliceRPCInput = original }()
+	sliceRPCInput = &neverEOFReadCloser{closed: make(chan struct{})}
+	var out, stderr bytes.Buffer
+	started := time.Now()
+	code := run([]string{"slice", "rpc", "--state-dir", t.TempDir(), "--timeout", "10ms"}, &out, &stderr)
+	if code != 2 || time.Since(started) > time.Second || !strings.Contains(out.String(), "invalid_request") {
+		t.Fatalf("code=%d elapsed=%s out=%s stderr=%s", code, time.Since(started), out.String(), stderr.String())
+	}
+}
+
+func TestSliceRPCProductionRejectsSpatialApplyBeforeNiriAccess(t *testing.T) {
+	original := sliceRPCInput
+	defer func() { sliceRPCInput = original }()
+	sliceRPCInput = io.NopCloser(strings.NewReader(`{"schema_version":1,"accept_schema_versions":[1],"request_id":"spatial-v1","verb":"spatial_apply","payload":{"source_id":"src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_epoch":"11111111-1111-4111-8111-111111111111","runtime_window_id":42,"changes":[{"kind":"width_percent","percent":50}]}}`))
+	cfg := config.Defaults()
+	cfg.StateDir = t.TempDir()
+	cfg.Slice.NiriCommand = "/definitely/not/invoked"
+	var out, stderr bytes.Buffer
+	code := runSliceRPC(nil, cfg, &out, &stderr)
+	if code != 2 || !strings.Contains(out.String(), "spatial_apply_unsupported_v1") {
+		t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+}
+
+func TestSliceRPCTypedInvalidAndTokenQuery(t *testing.T) {
+	originalInput := sliceRPCInput
+	defer func() { sliceRPCInput = originalInput }()
+	root := t.TempDir()
+	tokens, err := slicerpc.NewTokenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := tokens.CreatePending("host", "cli-token", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Status = slicerpc.TokenLaunched
+	if err := tokens.Update(record); err != nil {
+		t.Fatal(err)
+	}
+	sliceRPCInput = io.NopCloser(strings.NewReader(`{"schema_version":1,"accept_schema_versions":[1],"request_id":"cli-1","verb":"token_query","payload":{"token":"cli-token"}}`))
+	var out, stderr bytes.Buffer
+	code := run([]string{"slice", "rpc", "--state-dir", root}, &out, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+	var response slicerpc.Response
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil || response.Outcome.Status != slicerpc.StatusOK {
+		t.Fatalf("response=%s err=%v", out.String(), err)
+	}
+	sliceRPCInput = io.NopCloser(strings.NewReader(`{"schema_version":99,"request_id":"cli-2","verb":"liveness"}`))
+	out.Reset()
+	stderr.Reset()
+	code = run([]string{"slice", "rpc", "--state-dir", root}, &out, &stderr)
+	if code != 2 || !strings.Contains(out.String(), "invalid_request") || !strings.Contains(out.String(), "supported_schema_versions") {
+		t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+}
+
+type spatialTestMutator struct{ actions []any }
+
+func (m *spatialTestMutator) Snapshot(context.Context) (niriipc.State, error) {
+	name := "work"
+	output := "DP-1"
+	return niriipc.State{Outputs: map[string]niriipc.Output{"DP-1": {Name: "DP-1", Logical: niriipc.Logical{Width: 1920, Height: 1080, Scale: 1}}}, Workspaces: []niriipc.Workspace{{ID: 2, Index: 1, Name: &name, Output: &output, IsActive: true}}, Windows: []niriipc.Window{{ID: 42, PID: 10, WorkspaceID: ptrUint64(2), Layout: niriipc.Layout{WindowSize: []int{960, 540}}}, {ID: 99, PID: 11, WorkspaceID: ptrUint64(2), IsFocused: true, Layout: niriipc.Layout{WindowSize: []int{100, 100}}}}}, nil
+}
+func (m *spatialTestMutator) Action(_ context.Context, action any) error {
+	m.actions = append(m.actions, action)
+	return nil
+}
+func ptrUint64(value uint64) *uint64 { return &value }
+func TestHostSpatialRPCRechecksExactSourceAndVerifies(t *testing.T) {
+	sourceID := "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	sessionID := "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	epoch := "11111111-1111-4111-8111-111111111111"
+	now := time.Now().UTC()
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 2, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	mutator := &spatialTestMutator{}
+	snapshot := func(context.Context) (sliceprotocol.Envelope, error) {
+		current := source
+		if len(mutator.actions) > 0 {
+			current.Layout.WindowWidth = 1152
+		}
+		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: epoch, Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{current}, Conflicts: []sliceprotocol.Conflict{}}}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	payload := slicerpc.SpatialApplyPayload{SourceID: sourceID, SourceEpoch: epoch, RuntimeWindowID: 42, Changes: []slicerpc.SpatialChange{{Kind: "width_percent", Percent: 60}}}
+	if err := applyHostSpatial(ctx, snapshot, mutator, payload, time.Millisecond); err != nil || len(mutator.actions) != 1 {
+		t.Fatalf("apply err=%v actions=%#v", err, mutator.actions)
+	}
+	mutator.actions = nil
+	payload.SourceID = "src_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if err := applyHostSpatial(ctx, snapshot, mutator, payload, time.Millisecond); err == nil || len(mutator.actions) != 0 {
+		t.Fatalf("ownership mismatch mutated: err=%v actions=%#v", err, mutator.actions)
+	}
+}
+
+func TestSliceControllerCLIInitControlAndDisabledDefault(t *testing.T) {
+	root := t.TempDir()
+	var out, stderr bytes.Buffer
+	if code := run([]string{"slice", "controller", "run", "--state-dir", root}, &out, &stderr); code != 2 || !strings.Contains(stderr.String(), "opt-in") {
+		t.Fatalf("disabled code=%d stderr=%s", code, stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "init", "--state-dir", root, "--host-id", "host-a", "--leech-id", "leech-a"}, &out, &stderr); code != 0 {
+		t.Fatalf("init code=%d stderr=%s", code, stderr.String())
+	}
+	store, err := slicecontroller.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Read()
+	if err != nil || state.Namespace.Host != "host-a" {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Second, RetryInitialBackoff: time.Millisecond, RetryMaxBackoff: time.Millisecond, RetryMaxAttempts: 1, SourceGoneGrace: time.Second, SourceGoneConfirmations: 2}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- slicecontroller.ServeControl(ctx, store.SocketPath(), time.Second, slicecontroller.ControlHandler{Engine: engine})
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(store.SocketPath()); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("control socket not ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "status", "--state-dir", root}, &out, &stderr); code != 0 || !strings.Contains(out.String(), "controller_id") {
+		t.Fatalf("status code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	cancel()
+	<-done
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "init", "--state-dir", root, "--host-id", "host-a", "--leech-id", "leech-a"}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "already initialized") {
+		t.Fatalf("reinit code=%d stderr=%s", code, stderr.String())
+	}
+}
+
+type closeEffectProcessReader struct {
+	exe  string
+	argv []string
+	err  error
+}
+
+func (r closeEffectProcessReader) Exe(int) (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.exe, nil
+}
+func (r closeEffectProcessReader) Cmdline(int) ([]string, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return append([]string(nil), r.argv...), nil
+}
+
+func closeEffectNiriServer(t *testing.T, windows []niriipc.Window) (string, func() []string) {
+	t.Helper()
+	root, err := os.MkdirTemp("/tmp", "tr-close-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	path := filepath.Join(root, "niri.sock")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var mu sync.Mutex
+	requests := []string{}
+	eventSnapshots := 0
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			line, readErr := bufio.NewReader(conn).ReadString('\n')
+			if readErr != nil {
+				_ = conn.Close()
+				continue
+			}
+			mu.Lock()
+			requests = append(requests, strings.TrimSpace(line))
+			mu.Unlock()
+			switch {
+			case strings.Contains(line, "EventStream"):
+				eventSnapshots++
+				current := windows
+				if eventSnapshots > 1 {
+					current = nil
+				}
+				windowJSON, _ := json.Marshal(current)
+				_, _ = fmt.Fprintf(conn, "{\"Ok\":\"Handled\"}\n{\"WorkspacesChanged\":{\"workspaces\":[{\"id\":1,\"idx\":1,\"name\":\"work\",\"output\":\"DP-1\",\"is_active\":true}]}}\n{\"WindowsChanged\":{\"windows\":%s}}\n{\"ConfigLoaded\":{\"failed\":false}}\n", windowJSON)
+			case strings.Contains(line, "Outputs"):
+				_, _ = io.WriteString(conn, "{\"Ok\":{\"Outputs\":{\"DP-1\":{\"name\":\"DP-1\",\"logical\":{\"x\":0,\"y\":0,\"width\":1920,\"height\":1080,\"scale\":1,\"transform\":\"Normal\"}}}}}\n")
+			case strings.Contains(line, "CloseWindow"):
+				_, _ = io.WriteString(conn, "{\"Ok\":\"Handled\"}\n")
+			default:
+				_, _ = io.WriteString(conn, "{\"Err\":\"unexpected\"}\n")
+			}
+			_ = conn.Close()
+		}
+	}()
+	return path, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), requests...)
+	}
+}
+
+func closeEffectHarness(t *testing.T) (*slicecontroller.Engine, string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := slicecontroller.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Initialize(slicecontroller.Namespace{Host: "host", Leech: "leech"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 25, 15, 0, 0, 0, time.UTC)
+	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Minute, RetryInitialBackoff: time.Second, RetryMaxBackoff: time.Second, RetryMaxAttempts: 2, SourceGoneGrace: time.Second, SourceGoneConfirmations: 2}, Now: func() time.Time { return now }}
+	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	if _, _, _, err = engine.ApplyEnvelope(envelope, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = engine.SelectWorkspace("work", true); err != nil {
+		t.Fatal(err)
+	}
+	state, err := engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := state.Projections[sourceID]
+	executable := "/nix/store/test-kitty/bin/kitty"
+	argv := []string{executable, "--class", mapping.AppID, "-e", "redeem", "slice", "projection-run", "--source-id", sourceID, "--session", mapping.ExpectedSessionName, "--token", mapping.AttachToken}
+	if _, err = engine.PrepareProjection(sourceID, executable, argv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.RecordLaunch(sourceID, 123, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = engine.ObserveLocal("leech-epoch", []slicecontroller.OwnedWindow{{SourceID: sourceID, WindowID: 9, PID: 123, AppID: mapping.AppID}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = engine.AttachmentConnected(sourceID); err != nil {
+		t.Fatal(err)
+	}
+	return engine, executable, argv
+}
+
+func TestExecuteSliceControllerCloseDropEffectsRequireExactOwnershipAndStayLocal(t *testing.T) {
+	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, tc := range []struct {
+		name       string
+		kind       string
+		windows    func(string) []niriipc.Window
+		process    func(string, []string) closeEffectProcessReader
+		wantAction bool
+		wantErr    bool
+		invokeDrop bool
+	}{
+		{name: "exact owned close", kind: "close", windows: func(app string) []niriipc.Window {
+			return []niriipc.Window{{ID: 9, AppID: app, PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+		}, process: func(exe string, argv []string) closeEffectProcessReader {
+			return closeEffectProcessReader{exe: exe, argv: argv}
+		}, wantAction: true},
+		{name: "exact owned drop", kind: "drop", windows: func(app string) []niriipc.Window {
+			return []niriipc.Window{{ID: 9, AppID: app, PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+		}, process: func(exe string, argv []string) closeEffectProcessReader {
+			return closeEffectProcessReader{exe: exe, argv: argv}
+		}, wantAction: true, invokeDrop: true},
+		{name: "hostile argv", kind: "close", windows: func(app string) []niriipc.Window {
+			return []niriipc.Window{{ID: 9, AppID: app, PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+		}, process: func(exe string, argv []string) closeEffectProcessReader {
+			return closeEffectProcessReader{exe: exe, argv: append(argv, "--terminate-host-session")}
+		}, wantErr: true},
+		{name: "ambiguous windows", kind: "close", windows: func(app string) []niriipc.Window {
+			return []niriipc.Window{{ID: 9, AppID: app, PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}, {ID: 10, AppID: app, PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{2, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+		}, process: func(exe string, argv []string) closeEffectProcessReader {
+			return closeEffectProcessReader{exe: exe, argv: argv}
+		}, wantErr: true},
+		{name: "unowned app", kind: "close", windows: func(string) []niriipc.Window {
+			return []niriipc.Window{{ID: 9, AppID: "unrelated", PID: 123, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+		}, process: func(exe string, argv []string) closeEffectProcessReader {
+			return closeEffectProcessReader{exe: exe, argv: argv}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, executable, argv := closeEffectHarness(t)
+			state, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			appID := state.Projections[sourceID].AppID
+			socket, requests := closeEffectNiriServer(t, tc.windows(appID))
+			sentinel := filepath.Join(t.TempDir(), "remote-command-used")
+			command := filepath.Join(t.TempDir(), "forbidden-transport-rpc-zellij")
+			if err := os.WriteFile(command, []byte("#!/bin/sh\ntouch '"+sentinel+"'\nexit 99\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Defaults()
+			cfg.Slice.TransportCommand = command
+			cfg.Slice.ZellijCommand = command
+			cfg.Slice.RPCCommand = []string{command, "slice", "rpc"}
+			resolver := sliceenv.Resolver{Keys: []string{"NIRI_SOCKET", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"}, Environment: []string{"NIRI_SOCKET=" + socket, "WAYLAND_DISPLAY=wayland-test", "XDG_RUNTIME_DIR=/tmp"}}
+			processes := tc.process(executable, argv)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var executeErr error
+			if tc.invokeDrop {
+				payload, _ := json.Marshal(slicecontroller.SourcePayload{SourceID: sourceID})
+				response := (slicecontroller.ControlHandler{Engine: engine, Execute: func(ctx context.Context, effects []slicecontroller.Effect) error {
+					return executeSliceControllerEffectsWithProcesses(ctx, engine, cfg, resolver, effects, processes)
+				}}).Handle(ctx, slicecontroller.ControlRequest{SchemaVersion: slicecontroller.SchemaVersion, RequestID: "drop-1", Verb: slicecontroller.VerbDrop, Payload: payload})
+				if response.Outcome.Status != "ok" {
+					executeErr = errors.New(response.Outcome.Code)
+				}
+			} else {
+				_, effects, closeErr := engine.Close(sourceID)
+				if closeErr != nil || len(effects) != 1 || effects[0].Kind != slicecontroller.EffectCloseProjection {
+					t.Fatalf("close effects=%+v err=%v", effects, closeErr)
+				}
+				executeErr = executeSliceControllerEffectsWithProcesses(ctx, engine, cfg, resolver, effects, processes)
+			}
+			if (executeErr != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", executeErr, tc.wantErr)
+			}
+			all := requests()
+			actions := []string{}
+			for _, request := range all {
+				if strings.Contains(request, "Action") {
+					actions = append(actions, request)
+				}
+				for _, forbidden := range []string{"zellij", "ssh", "rpc", "terminate", "kill", "quit"} {
+					if strings.Contains(strings.ToLower(request), forbidden) {
+						t.Fatalf("close/drop emitted forbidden remote/session verb %q: %s", forbidden, request)
+					}
+				}
+			}
+			if tc.wantAction {
+				if len(actions) != 1 || actions[0] != `{"Action":{"CloseWindow":{"id":9}}}` {
+					t.Fatalf("exact owned close actions=%v requests=%v", actions, all)
+				}
+			} else if len(actions) != 0 {
+				t.Fatalf("unproven close emitted action: %v", actions)
+			}
+			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+				t.Fatalf("close/drop invoked transport/RPC/Zellij command: %v", err)
+			}
+		})
+	}
+}
+
+func TestCurrentStaticWorkspaceRejectsUnnamedDuplicateCollisionAndAmbiguity(t *testing.T) {
+	out := "DP-1"
+	work := "Work"
+	lower := "work"
+	base := niriipc.State{Workspaces: []niriipc.Workspace{{ID: 1, Index: 1, Name: &work, Output: &out, IsFocused: true}}}
+	if got, err := currentStaticWorkspace(base); err != nil || got != "Work" {
+		t.Fatalf("got=%q err=%v", got, err)
+	}
+	cases := []niriipc.State{{Workspaces: []niriipc.Workspace{{ID: 1, Index: 1, Output: &out, IsFocused: true}}}, {Workspaces: []niriipc.Workspace{{ID: 1, Index: 1, Name: &work, Output: &out, IsFocused: true}, {ID: 2, Index: 2, Name: &work, Output: &out}}}, {Workspaces: []niriipc.Workspace{{ID: 1, Index: 1, Name: &work, Output: &out, IsFocused: true}, {ID: 2, Index: 2, Name: &lower, Output: &out}}}, {Workspaces: []niriipc.Workspace{{ID: 1, Index: 1, Name: &work, Output: &out, IsFocused: true}, {ID: 2, Index: 2, Name: &lower, Output: &out, IsFocused: true}}}}
+	for i, state := range cases {
+		if _, err := currentStaticWorkspace(state); err == nil {
+			t.Fatalf("case %d accepted", i)
+		}
+	}
+}
+
+func TestSliceModeCLIIsDisabledByDefaultAndInspectable(t *testing.T) {
+	root := t.TempDir()
+	var out, stderr bytes.Buffer
+	if code := run([]string{"slice", "mode", "status", "--state-dir", root}, &out, &stderr); code != 0 || !strings.Contains(out.String(), `"enabled":false`) {
+		t.Fatalf("status code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "mode", "enable", "--state-dir", root}, &out, &stderr); code != 0 || !strings.Contains(out.String(), `"enabled":true`) {
+		t.Fatalf("enable code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "mode", "disable", "--state-dir", root}, &out, &stderr); code != 0 || !strings.Contains(out.String(), `"enabled":false`) {
+		t.Fatalf("disable code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+}
+
+func TestSliceAttachCLIExactExit(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "z")
+	version := filepath.Join(base, "0.43.1")
+	if err := os.MkdirAll(version, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", filepath.Join(version, "exact"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	command := filepath.Join(root, "zellij")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.43.1'; exit 0; fi\nsleep 0.3\nexit 0\n"
+	if err := os.WriteFile(command, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code := run([]string{"slice", "attach", "--session", "exact", "--token", "cli", "--real-socket-dir", base, "--private-root", filepath.Join(base, "private"), "--shim-cache", filepath.Join(base, "cache"), "--zellij-command", command}, &out, &stderr)
+	if code != 0 || !strings.Contains(out.String(), `"status":"detached"`) {
+		t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
 }

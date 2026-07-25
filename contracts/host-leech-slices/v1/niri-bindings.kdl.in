@@ -1,0 +1,7 @@
+// Terminal Redeemer host/leech slice contract v1.0.0.
+// Packaged in source-template and generated store-pinned forms.
+// This repository and its module do not install these bindings.
+binds {
+    Mod+Return { spawn "@REDEEM@" "slice" "launch"; }
+    Mod+W { spawn "@REDEEM@" "slice" "close-focused"; }
+}

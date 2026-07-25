@@ -3,3 +3,5 @@ devbox.lock
 result
 bin/
 coverage.out
+**/testdata/fuzz/
+.pi-subagents/

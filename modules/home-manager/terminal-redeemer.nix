@@ -34,6 +34,41 @@ let
         zellijAttachOrCreate = cfg.terminal.zellijAttachOrCreate;
       };
     };
+    slice = {
+      leechModeEnabled = cfg.slice.leechMode.enable;
+      sourceHost = cfg.slice.sourceHost;
+      selfCommand = cfg.slice.selfCommand;
+      kittyCommand = cfg.slice.kittyCommand;
+      transportCommand = cfg.slice.transportCommand;
+      transportOptions = cfg.slice.transportOptions;
+      rpcCommand = cfg.slice.rpcCommand;
+      zellijCommand = cfg.slice.zellijCommand;
+      niriCommand = cfg.slice.niriCommand;
+      systemctlCommand = cfg.slice.systemctlCommand;
+      expectedNiriVersion = "25.11";
+      requestTimeout = cfg.slice.requestTimeout;
+      keepaliveInterval = cfg.slice.keepaliveInterval;
+      keepaliveCount = cfg.slice.keepaliveCount;
+      retryMaxAttempts = cfg.slice.retryMaxAttempts;
+      retryInitialBackoff = cfg.slice.retryInitialBackoff;
+      retryMaxBackoff = cfg.slice.retryMaxBackoff;
+      attachPrivateRoot = cfg.slice.attachPrivateRoot;
+      attachShimCache = cfg.slice.attachShimCache;
+      graphicalContextKeys = [ "NIRI_SOCKET" "WAYLAND_DISPLAY" "XDG_RUNTIME_DIR" ];
+      clipboard.enabled = false;
+      controller = {
+        enabled = cfg.slice.controller.enable;
+        hostID = cfg.slice.controller.hostID;
+        leechID = cfg.slice.controller.leechID;
+        pollInterval = cfg.slice.controller.pollInterval;
+        controlTimeout = cfg.slice.controller.controlTimeout;
+        retryWindow = cfg.slice.controller.retryWindow;
+        sourceGoneGrace = cfg.slice.controller.sourceGoneGrace;
+        sourceGoneConfirmations = cfg.slice.controller.sourceGoneConfirmations;
+        authorityMode = "host_location";
+        leechWriteAuthorized = false;
+      };
+    };
     mirror = {
       sourceHost = cfg.mirror.sourceHost;
       sshCommand = cfg.mirror.sshCommand;
@@ -61,6 +96,17 @@ let
   captureExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} capture once";
   resumeExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} resume";
   pruneExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} prune run";
+  controllerExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} slice controller run";
+  sliceLaunchCommand = [ (lib.getExe cfg.package) "slice" "launch" ];
+  sliceCloseFocusedCommand = [ (lib.getExe cfg.package) "slice" "close-focused" ];
+  sliceNiriIntegrationFragment = ''
+    // Terminal Redeemer host/leech consumer contract v1.0.0.
+    // Opt-in template only; this module does not install these bindings.
+    binds {
+        Mod+Return { spawn "${lib.getExe cfg.package}" "slice" "launch"; }
+        Mod+W { spawn "${lib.getExe cfg.package}" "slice" "close-focused"; }
+    }
+  '';
   graphicalPath = "${config.home.profileDirectory}/bin:/run/current-system/sw/bin";
 in {
   options.programs.terminal-redeemer = {
@@ -221,6 +267,41 @@ in {
       description = "Use zellij attach-or-create strategy during restore.";
     };
 
+    slice = {
+      leechMode.enable = lib.mkEnableOption "explicit routed Leech terminal-launch mode (disabled by default; runtime mode can also be inspected/toggled with redeem slice mode)";
+      launchCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceLaunchCommand; description = "Packaged argv suitable for a future leech Niri Super+Enter binding; this module does not install the binding."; };
+      closeFocusedCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceCloseFocusedCommand; description = "Packaged argv suitable for a future leech Niri Super+W projection-close binding; this module does not install the binding."; };
+      niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = sliceNiriIntegrationFragment; description = "Generated opt-in Niri KDL fragment for Super+Enter routed launch and Super+W owned projection close; never installed automatically."; };
+      sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "Operator-owned SSH destination for the additive slice RPC transport."; };
+      selfCommand = lib.mkOption { type = lib.types.str; default = lib.getExe cfg.package; defaultText = lib.literalExpression "lib.getExe cfg.package"; description = "Packaged redeem executable; executed directly without a shell wrapper."; };
+      kittyCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.kitty; defaultText = lib.literalExpression "lib.getExe pkgs.kitty"; description = "Pinned packaged Kitty executable for host launches."; };
+      transportCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.openssh; defaultText = lib.literalExpression "lib.getExe pkgs.openssh"; description = "Packaged SSH transport executable. Authentication and host keys remain operator-owned."; };
+      transportOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "Validated operator-owned SSH argv; no host-key or authentication defaults are weakened by the module."; };
+      rpcCommand = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ (lib.getExe cfg.package) "slice" "rpc" ]; defaultText = lib.literalExpression ''[ (lib.getExe cfg.package) "slice" "rpc" ]''; description = "Fixed shell-inert remote RPC command argv."; };
+      zellijCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.zellij; defaultText = lib.literalExpression "lib.getExe pkgs.zellij"; description = "Pinned Zellij 0.43.1 executable for exact live-only attachment."; };
+      niriCommand = lib.mkOption { type = lib.types.str; default = lib.getExe pkgs.niri; defaultText = lib.literalExpression "lib.getExe pkgs.niri"; description = "Pinned Niri 25.11 executable used only for compatibility checks; IPC is direct."; };
+      systemctlCommand = lib.mkOption { type = lib.types.str; default = lib.getExe' pkgs.systemd "systemctl"; defaultText = lib.literalExpression ''lib.getExe' pkgs.systemd "systemctl"''; description = "Packaged systemctl used to read only allowlisted graphical user-manager environment keys."; };
+      requestTimeout = lib.mkOption { type = lib.types.str; default = "15s"; description = "Positive bound for one RPC request."; };
+      keepaliveInterval = lib.mkOption { type = lib.types.str; default = "15s"; description = "Positive SSH transport keepalive interval."; };
+      keepaliveCount = lib.mkOption { type = lib.types.ints.between 1 10; default = 3; description = "Bounded SSH keepalive failure count."; };
+      retryMaxAttempts = lib.mkOption { type = lib.types.ints.between 1 10; default = 3; description = "Bounded transport attempts for read-only/idempotent queries."; };
+      retryInitialBackoff = lib.mkOption { type = lib.types.str; default = "200ms"; description = "Positive initial transport retry delay."; };
+      retryMaxBackoff = lib.mkOption { type = lib.types.str; default = "2s"; description = "Positive maximum transport retry delay."; };
+      attachPrivateRoot = lib.mkOption { type = lib.types.str; default = ""; description = "Optional absolute same-filesystem dedicated marked attachment root; empty derives and initializes it under the live socket base."; };
+      attachShimCache = lib.mkOption { type = lib.types.str; default = ""; description = "Optional absolute empty Zellij resurrection-isolation cache."; };
+      clipboard.enabled = lib.mkOption { type = lib.types.bool; readOnly = true; default = false; description = "Clipboard transfer is disabled for the first slice-controller rollout, independently of legacy mirror clipboard."; };
+      controller = {
+        enable = lib.mkEnableOption "the opt-in foreground terminal-slice reconciliation controller";
+        hostID = lib.mkOption { type = lib.types.str; default = "host"; description = "Durable host namespace identity."; };
+        leechID = lib.mkOption { type = lib.types.str; default = "leech"; description = "Durable leech namespace identity."; };
+        pollInterval = lib.mkOption { type = lib.types.str; default = "2s"; description = "Positive bounded full-snapshot polling interval."; };
+        controlTimeout = lib.mkOption { type = lib.types.str; default = "5s"; description = "Positive local control-socket request bound."; };
+        retryWindow = lib.mkOption { type = lib.types.str; default = "30s"; description = "Finite reconnect budget preserved across restart."; };
+        sourceGoneGrace = lib.mkOption { type = lib.types.str; default = "5s"; description = "Finite complete-authority disappearance grace."; };
+        sourceGoneConfirmations = lib.mkOption { type = lib.types.ints.between 2 20; default = 2; description = "Consecutive accepted complete absences required for early confirmation."; };
+      };
+    };
+
     mirror = {
       sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "SSH source host for live session mirroring."; };
       sshCommand = lib.mkOption { type = lib.types.str; default = "ssh"; description = "SSH executable."; };
@@ -289,6 +370,23 @@ in {
         Type = "oneshot";
         ExecStart = resumeExecStart;
         Environment = [ "PATH=${graphicalPath}" ];
+        Restart = "on-failure";
+        RestartSec = "3s";
+      };
+      Install.WantedBy = [ "graphical-session.target" ];
+    };
+
+    systemd.user.services.terminal-redeemer-slice-controller = lib.mkIf cfg.slice.controller.enable {
+      Unit = {
+        Description = "terminal-redeemer host/leech slice controller";
+        After = [ "graphical-session.target" ];
+        PartOf = [ "graphical-session.target" ];
+        StartLimitIntervalSec = "30s";
+        StartLimitBurst = 5;
+      };
+      Service = {
+        Type = "simple";
+        ExecStart = controllerExecStart;
         Restart = "on-failure";
         RestartSec = "3s";
       };

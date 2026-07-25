@@ -1,13 +1,16 @@
 package mirror
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
+	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 )
 
 type fakeReader map[int]procmeta.ProcessInfo
@@ -129,5 +132,32 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 	if window.Terminal == nil || window.Terminal.CWD != "/home/jmo/project" {
 		t.Fatalf("expected resolver-upgraded cwd, got %#v", window.Terminal)
+	}
+}
+
+func TestLegacySnapshotFixtureRemainsUnversionedAndSeparate(t *testing.T) {
+	payload, err := os.ReadFile("testdata/legacy-snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := DecodeSnapshot(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Host != "legacy-host" || len(Discover(snapshot)) != 1 {
+		t.Fatalf("unexpected legacy fixture: %+v", snapshot)
+	}
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := shape["schema_version"]; found {
+		t.Fatal("legacy payload acquired schema_version")
+	}
+	if _, found := shape["observation"]; found {
+		t.Fatal("legacy payload acquired authoritative observation")
+	}
+	if _, err := sliceprotocol.Decode(bytes.NewReader(payload)); err == nil {
+		t.Fatal("revisioned decoder accepted legacy snapshot")
 	}
 }

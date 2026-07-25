@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/charmbracelet/bubbletea v1.2.4
 	golang.org/x/sys v0.27.0
+	golang.org/x/text v0.3.8
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -23,5 +24,4 @@ require (
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/sync v0.9.0 // indirect
-	golang.org/x/text v0.3.8 // indirect
 )

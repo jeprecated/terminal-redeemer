@@ -26,7 +26,7 @@ Manual `redeem resume` is the distributed default. It restores attachable Zellij
 
 Home Manager exposes `programs.terminal-redeemer.restore.onStartup`, defaulting to `false`. When explicitly enabled it installs a bounded-retry graphical-session user oneshot whose exact applying command is `redeem --config …/terminal-redeemer/config.yaml resume`; it does not contain another restore implementation. **Before enabling it, disable every host-local Niri/Kitty/Zellij startup restoration hook** to prevent duplicate ownership. Removing those old hooks from a consumer repository is a follow-up in that repository, not a change made here.
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for readiness, status meanings, migration, retention, disable/rollback, and journal commands.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for operations and the [host/leech readiness and consumer contract](docs/HOST_LEECH_READINESS.md) for deployment order, rollback invariants, the generated Niri binding template, and the operator smoke gate.
 
 ## Live mirroring
 
@@ -55,7 +55,7 @@ redeem mirror close --host workstation.example --dry-run
 redeem mirror close --host workstation.example
 ```
 
-`open` accepts exactly one selection strategy: `--all`, repeatable `--session`, `--select N`, or its interactive prompt. It preserves source order, host, title, session, and CWD in the launch plan. `--mode` is `attach` or read-only `watch`. The remote command clears nested-Zellij environment variables before attaching.
+`open` accepts exactly one selection strategy: `--all`, repeatable `--session`, `--select N`, or its interactive prompt. It preserves source order, host, title, session, and CWD in the launch plan. Interactive `attach` remains supported. Pinned Zellij 0.43.1 has no `watch` command, so `--mode watch` returns an explicit unsupported result without constructing a command. The legacy attach command clears nested-Zellij environment variables.
 
 Mirrored Kitty windows map Ctrl+V to `redeem mirror paste-image`. Supported local image clipboard data is written to a unique temporary path, copied to the same path on the source with SCP, and that path is injected through the window's private Kitty control socket. Non-image or unreadable clipboard data forwards Ctrl+V unchanged. Use `mirror.clipboard.enabled: false` or `open --no-clipboard` to disable this mapping.
 
@@ -69,9 +69,13 @@ Current live-mirror constraints:
 - local terminal launcher: Kitty-compatible command and remote-control behavior
 - remote multiplexer: Zellij
 - source host: `redeem mirror snapshot` available through SSH
-- no automatic reconciliation, pane-level picker, or always-running daemon yet
+- legacy mirror remains one-shot; the separate slice controller is opt-in and disabled by default
 
-See [docs/CONFIG.md](docs/CONFIG.md) for precedence/schema and [docs/OPERATIONS.md](docs/OPERATIONS.md) for dependencies, security, and troubleshooting.
+Architecture decisions: [prior-boot resume](docs/adr/0001-resume-zellij-terminals-in-niri.md), [host-leech terminal slices](docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md), controller [workspace sharing and persistence semantics](docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md), and the [single-monitor Niri spatial mapping policy](docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md).
+
+The additive [live source inventory, RPC, and controller protocol](docs/PROTOCOL.md) provides explicit initialization, revisioned complete/degraded snapshots, bounded typed RPC, crash-safe launch tokens, exact live-only attachment, an opt-in foreground reconciler, and disabled-by-default routed Leech launches. `redeem slice launch` routes selected static workspaces to exactly one host Kitty/Zellij transaction and never falls back locally after remote intent; the host owns execution/work and the leech window is only a projection. The module exports packaged launch argv but installs no consumer keybinding. These surfaces do not replace the legacy one-shot mirror JSON contract.
+
+See [docs/CONFIG.md](docs/CONFIG.md) for precedence/schema, [docs/OPERATIONS.md](docs/OPERATIONS.md) for dependencies, security, and troubleshooting, and the [hermetic host/leech acceptance matrix](docs/testing/host-leech-hermetic-matrix.md) for executable test traceability and the separate live operator smoke gate.
 
 ## Other commands
 
@@ -79,6 +83,13 @@ See [docs/CONFIG.md](docs/CONFIG.md) for precedence/schema and [docs/OPERATIONS.
 redeem capture once|run
 redeem history list|inspect
 redeem resume [--dry-run]
+redeem slice inventory init|snapshot
+redeem slice rpc
+redeem slice attach --session NAME --token TOKEN
+redeem slice controller init|run|status|workspace-add|workspace-remove|pickup|drop|close|reopen|undo|reconnect
+redeem slice mode enable|disable|status
+redeem slice launch [--reconnect-token TOKEN]
+redeem slice close-focused
 redeem restore apply|tui
 redeem prune run
 redeem doctor
@@ -87,6 +98,10 @@ redeem doctor
 ## Flake outputs
 
 - `packages.<system>.terminal-redeemer`
+- `packages.<system>.host-leech-consumer-contract`
 - `apps.<system>.redeem`
 - `homeManagerModules.terminal-redeemer`
 - `nixosModules.terminal-redeemer`
+- `lib.sliceConsumerContract`
+
+The contract package contains the versioned technical contract, strict schema, source Niri binding template, and rendered store-path binding fragment. Repository checks validate the schema and require packaged source artifacts to match the repository bytes.

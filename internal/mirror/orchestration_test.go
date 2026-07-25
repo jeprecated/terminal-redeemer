@@ -86,30 +86,29 @@ func TestDiscoverFiltersAndOrdersKittyZellijWindows(t *testing.T) {
 	}
 }
 
-func TestPlanLaunchAttachWatchMetadataAndQuoting(t *testing.T) {
+func TestPlanLaunchAttachMetadataAndWatchUnsupported(t *testing.T) {
 	window := Window{Order: 4, SourceWindowID: 9, Title: "Project\nTitle", ZellijSession: "bad'; echo owned", Terminal: &Terminal{CWD: "/tmp/a'b"}}
-	for _, mode := range []string{"attach", "watch"} {
-		plan, err := PlanLaunch(window, LaunchConfig{
-			SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"},
-			LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Mode: mode,
-			Socket: "unix:/tmp/redeem.sock", Clipboard: true,
-		})
-		if err != nil {
-			t.Fatalf("plan %s: %v", mode, err)
-		}
-		if plan.Title != "source[4]: Project Title" || plan.RemoteCWD != "/tmp/a'b" {
-			t.Fatalf("metadata lost: %#v", plan)
-		}
-		rendered := strings.Join(plan.Command.Args, " ")
-		if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'"+mode+"'") {
-			t.Fatalf("missing mode/env scrub: %s", rendered)
-		}
-		if !strings.Contains(rendered, `'bad'"'"'; echo owned'`) || !strings.Contains(rendered, `cd -- '/tmp/a'"'"'b'`) {
-			t.Fatalf("untrusted metadata was not quoted: %s", rendered)
-		}
-		if plan.Command.Args[len(plan.Command.Args)-3] != "--" || plan.Command.Args[len(plan.Command.Args)-2] != "source" {
-			t.Fatalf("SSH host boundary missing: %#v", plan.Command.Args)
-		}
+	cfg := LaunchConfig{SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Mode: "attach", Socket: "unix:/tmp/redeem.sock", Clipboard: true}
+	plan, err := PlanLaunch(window, cfg)
+	if err != nil {
+		t.Fatalf("plan attach: %v", err)
+	}
+	if plan.Title != "source[4]: Project Title" || plan.RemoteCWD != "/tmp/a'b" {
+		t.Fatalf("metadata lost: %#v", plan)
+	}
+	rendered := strings.Join(plan.Command.Args, " ")
+	if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'attach'") {
+		t.Fatalf("missing attach/env scrub: %s", rendered)
+	}
+	if !strings.Contains(rendered, `'bad'"'"'; echo owned'`) || !strings.Contains(rendered, `cd -- '/tmp/a'"'"'b'`) {
+		t.Fatalf("untrusted metadata was not quoted: %s", rendered)
+	}
+	if plan.Command.Args[len(plan.Command.Args)-3] != "--" || plan.Command.Args[len(plan.Command.Args)-2] != "source" {
+		t.Fatalf("SSH host boundary missing: %#v", plan.Command.Args)
+	}
+	cfg.Mode = "watch"
+	if _, err := PlanLaunch(window, cfg); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("watch should be explicitly unsupported, got %v", err)
 	}
 }
 
