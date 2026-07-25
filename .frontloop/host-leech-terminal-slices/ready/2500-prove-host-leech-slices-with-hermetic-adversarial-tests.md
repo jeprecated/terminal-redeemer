@@ -10,7 +10,7 @@ Build a deterministic test matrix for inventory, selection, transport, attachmen
 
 ## Acceptance Criteria
 
-- Cover zero, one, and many eligible terminals plus multiple windows attached to one Zellij session.
+- Cover zero, one, and many eligible terminals plus explicit rejection/reporting when the one-Kitty-window/one-Zellij-session invariant is violated.
 - Cover pickup/drop/undo, dynamic add/remove/change/move, repeated revisions, duplicate entries/windows, manual local close, and source epoch replacement.
 - Cover timeout, disconnect, bounded backoff, stale/out-of-order revisions, full resync, restart, and duplicate-free recovery.
 - Cover malformed inventory, failed attach/launch/move/close, unavailable source, partial failures, and cancellation without corrupting independent items or state.
@@ -18,7 +18,9 @@ Build a deterministic test matrix for inventory, selection, transport, attachmen
 - Prove nested-Zellij environment scrubbing.
 - Use the flake-locked Zellij package to prove exact concurrent interactive attach and no-create-on-missing semantics.
 - Prove status/drop/close affect only owned local slice windows and never emit remote termination.
-- Cover selected spatial mapping and degraded display topologies.
+- Cover static workspace selection, automatic new-window projection, individual pickup/drop overrides, and both host-location and leech-location authority modes.
+- Cover one-monitor equal-resolution and differing-resolution spatial mapping, workspace creation, exact order, and normalized size correspondence.
+- Cover Leech-mode routed terminal creation, selected/unselected workspaces, unique session creation, projection confirmation, local fallback, no-fallback, retries, and duplicate prevention.
 - Keep legacy one-shot tests green; defer watch unless separately proven.
 - Require go test and flake checks without live Wayland or network access.
 
@@ -30,4 +32,4 @@ Build a deterministic test matrix for inventory, selection, transport, attachmen
 
 ## Implementation Notes
 
-Depends on both decisions and protocol, transport, and reconciliation implementation. Develop tests alongside owning tasks, then close cross-layer gaps here. Block rollout rather than weakening assertions if pinned Zellij contradicts the plan.
+Depends on the resolved workspace-selection and single-monitor spatial policies plus protocol, transport, reconciliation, and routed-launch implementation. Develop tests alongside owning tasks, then close cross-layer gaps here. Block rollout rather than weakening assertions if pinned Zellij contradicts the plan.

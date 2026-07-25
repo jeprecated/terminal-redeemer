@@ -11,10 +11,10 @@ Evolve source inventory into an additive stable protocol that reconciles open Ki
 ## Acceptance Criteria
 
 - Add an explicit schema version and compatibility policy while preserving current one-shot snapshot consumers.
-- Give each eligible open source window a stable identity namespaced by host/source epoch and distinct from Zellij session, runtime Niri ID, order, title, and CWD.
+- Give each eligible open source window a stable identity namespaced by host/source epoch and bind it one-to-one to exactly one verified Zellij session, independently of runtime Niri ID, order, title, and CWD.
 - Carry verified Zellij session and host Niri workspace/output/placement metadata required by the selected spatial policy.
 - Provide monotonic revisioned full snapshots or equivalent events with deterministic order, freshness, source epoch, and resync semantics.
-- Keep multiple windows for one session distinct and make duplicate payloads/revisions idempotent.
+- Reject or explicitly report a one-window/one-session invariant conflict when multiple eligible windows claim one Zellij session; make duplicate payloads/revisions for the same stable window idempotent.
 - Define machine-readable outcomes for disappearance, source epoch changes, stale snapshots, malformed entries, and metadata changes.
 - Remain scoped to open eligible Kitty/Zellij windows rather than switching primary discovery to headless session inventory.
 - Test legacy payloads, negotiation, revision replay, identity stability, epoch replacement, duplicates, and hostile metadata.
@@ -22,7 +22,7 @@ Evolve source inventory into an additive stable protocol that reconciles open Ki
 ## Design Decisions
 
 - Protocol evolution is additive and current snapshot/list/open consumers remain compatible.
-- Window and Zellij session identities are distinct.
+- Window and Zellij session identities are distinct fields but must form a one-to-one mapping in the initial product policy.
 - Use revisioned full snapshots with bounded polling initially; event streaming is deferred.
 - Runtime Niri IDs are source-epoch evidence, not durable cross-epoch identity.
 
