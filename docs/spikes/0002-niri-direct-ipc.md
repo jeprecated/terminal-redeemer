@@ -4,7 +4,6 @@
 - **Pinned contract:** Niri 25.11 and Kitty 0.45.0 from this repository's locked nixpkgs input
 - **Live nested proof:** `scripts/spikes/niri-direct-ipc.sh`
 - **Direct socket probe:** `scripts/spikes/niri-direct-ipc-probe.py`
-- **Reusable fixtures:** `internal/niri/testdata/ipc-*.json*`
 
 ## Decision
 
@@ -192,25 +191,31 @@ Requirements:
 
 The controller may keep a local event-stream connection open. The remote/leech-facing protocol remains revisioned full snapshots with bounded polling for MVP.
 
-## Fixtures and automated checks
+## Automated and live checks
 
-`internal/niri/ipc_spike_test.go` verifies:
-
-- event-stream replay ordering and the final `ConfigLoaded` barrier;
-- complete versus dangling joined state;
-- exact ID-targeted and focus-preserving action shapes;
-- source-instance fingerprint stability and rotation.
-
-The committed fixtures are synthetic, deterministic forms of the pinned live observations. The nested live harness remains the operator check for actual compositor mutation behavior.
-
-Run:
+Production tests in `internal/niriipc` verify strict production-client reply
+handling, replay barriers, validation failures, bounded input, version parsing,
+and exact action encoding without maintaining a synthetic Niri state oracle.
+The hermetic matrix runs the production version gate against the actual locked
+Niri binary and accepts its `niri 25.11 (Nixpkgs)` form only when the exact
+version token is `25.11`. Run:
 
 ```bash
-devbox run test
-nix run .#niri-direct-ipc-spike
+go test ./internal/niriipc
+nix build .#checks.x86_64-linux.host-leech-hermetic-matrix
 ```
 
-The flake app supplies the locked Niri, Kitty, Python, and probe paths. It requires an existing parent Wayland session because it starts bounded nested Niri instances.
+The nested live harness remains the distinct operator proof for actual
+compositor mutation behavior. From an existing disposable parent Wayland
+session, run exactly:
+
+```console
+nix develop .#niri-spike --command env NIRI_BIN=niri KITTY_BIN=kitty PYTHON_BIN=python3 NIRI_PROBE="$PWD/scripts/spikes/niri-direct-ipc-probe.py" EXPECTED_NIRI_VERSION=25.11 bash scripts/spikes/niri-direct-ipc.sh
+```
+
+The locked shell supplies Niri, Kitty, and Python without restoring a package or
+app output. The script itself verifies Niri 25.11 before starting its bounded
+nested instances.
 
 ## Residual risks
 

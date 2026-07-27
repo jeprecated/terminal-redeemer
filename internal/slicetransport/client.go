@@ -88,7 +88,7 @@ func (c Client) Call(ctx context.Context, request slicerpc.Request) (slicerpc.Re
 		}
 	}
 	status := slicerpc.StatusDisconnected
-	if request.Verb == slicerpc.VerbLaunch || request.Verb == slicerpc.VerbWorkspaceEnsure || request.Verb == slicerpc.VerbSpatialApply {
+	if request.Verb == slicerpc.VerbLaunch || request.Verb == slicerpc.VerbWorkspaceEnsure {
 		status = slicerpc.StatusPending
 	}
 	return slicerpc.Response{}, &AmbiguousError{Status: status, Err: last}
@@ -201,8 +201,8 @@ func validateOutcome(request slicerpc.Request, response slicerpc.Response) error
 	status, code := response.Outcome.Status, response.Outcome.Code
 	knownCode := map[slicerpc.OutcomeStatus]map[string]bool{
 		slicerpc.StatusOK:          {"": true},
-		slicerpc.StatusInvalid:     {"invalid_request": true, "invalid_payload": true, "invalid_workspace_name": true, "invalid_token": true, "invalid_spatial_apply": true, "invalid_launch_metadata": true, "unsupported_verb": true},
-		slicerpc.StatusUnavailable: {"niri_version_unavailable": true, "snapshot_unavailable": true, "workspace_ensure_failed": true, "spatial_apply_failed": true, "launch_unavailable": true, "token_store_unavailable": true, "token_not_found": true, "token_state_unavailable": true},
+		slicerpc.StatusInvalid:     {"invalid_request": true, "invalid_payload": true, "invalid_workspace_name": true, "invalid_token": true, "invalid_launch_metadata": true, "unsupported_verb": true},
+		slicerpc.StatusUnavailable: {"niri_version_unavailable": true, "snapshot_unavailable": true, "workspace_ensure_failed": true, "launch_unavailable": true, "token_store_unavailable": true, "token_not_found": true, "token_state_unavailable": true},
 		slicerpc.StatusPending:     {"launch_pending": true}, slicerpc.StatusDisconnected: {"transport_disconnected": true}, slicerpc.StatusFailed: {"launch_failed": true, "launch_identity_conflict": true},
 	}
 	codes, ok := knownCode[status]
@@ -258,14 +258,6 @@ func validateOutcome(request slicerpc.Request, response slicerpc.Response) error
 		parsed, err := strconv.ParseUint(id.String(), 10, 64)
 		if err != nil || parsed == 0 {
 			return errors.New("invalid workspace id")
-		}
-	case slicerpc.VerbSpatialApply:
-		if status != slicerpc.StatusOK {
-			return errors.New("spatial apply response has invalid result status")
-		}
-		result, ok := response.Result.(map[string]any)
-		if !ok || len(result) != 1 || result["applied"] != true {
-			return errors.New("invalid spatial apply result")
 		}
 	case slicerpc.VerbLaunch, slicerpc.VerbTokenQuery, slicerpc.VerbTokenReplay:
 		if status != slicerpc.StatusOK && status != slicerpc.StatusPending && status != slicerpc.StatusFailed {
@@ -378,7 +370,6 @@ func validateNonResult(verb slicerpc.Verb, status slicerpc.OutcomeStatus, code s
 		slicerpc.VerbLiveness:        {"invalid_payload": true, "niri_version_unavailable": true},
 		slicerpc.VerbSnapshot:        {"invalid_payload": true, "niri_version_unavailable": true, "snapshot_unavailable": true},
 		slicerpc.VerbWorkspaceEnsure: {"invalid_payload": true, "invalid_workspace_name": true, "niri_version_unavailable": true, "workspace_ensure_failed": true},
-		slicerpc.VerbSpatialApply:    {"invalid_spatial_apply": true, "niri_version_unavailable": true, "spatial_apply_failed": true},
 		slicerpc.VerbLaunch:          {"invalid_token": true, "invalid_launch_metadata": true, "launch_identity_conflict": true, "launch_unavailable": true, "token_state_unavailable": true},
 		slicerpc.VerbTokenQuery:      {"invalid_token": true, "invalid_launch_metadata": true, "token_store_unavailable": true, "token_not_found": true, "token_state_unavailable": true},
 		slicerpc.VerbTokenReplay:     {"invalid_token": true, "invalid_launch_metadata": true, "token_store_unavailable": true, "token_not_found": true, "token_state_unavailable": true},

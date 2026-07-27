@@ -61,7 +61,7 @@ func inputFromFixture(t *testing.T, name string) Input {
 	host := observation(Host, fixture.SourceOutput, fixture.SourceWindow)
 	leech := observation(Leech, fixture.TargetOutput, fixture.TargetWindow)
 	return Input{
-		Mode: HostLocation, PreviousMode: HostLocation, ControllerID: "controller-1", Generation: 1,
+		ControllerID: "controller-1", Generation: 1,
 		Host: host, Leech: &leech,
 		HostWorkspaces: []Workspace{workspace(1, "Dev")}, LeechWorkspaces: []Workspace{workspace(1, "Dev")},
 		Ownership: Ownership{SourceID: "source-1", HostCompositorEpoch: host.SourceEpoch, LeechCompositorEpoch: leech.SourceEpoch, HostRuntimeWindowID: 10, LeechRuntimeWindowID: 20, ProjectionPositivelyOwned: true},
@@ -194,8 +194,6 @@ func TestWorkspaceDuplicatesAndCaseCollisionsAreConflicts(t *testing.T) {
 
 func TestHostLocationConvergesAllSupportedLeechDivergence(t *testing.T) {
 	input := inputFromFixture(t, "equal-resolution.json")
-	baseline := Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Tiled, WidthPercent: 50, HeightPercent: 50}
-	input.Baseline = &baseline
 	input.Leech.Workspace = workspace(2, "Other")
 	input.LeechWorkspaces = append(input.LeechWorkspaces, workspace(2, "Other"))
 	input.Leech.Mode, input.Leech.Order = Floating, nil
@@ -216,230 +214,66 @@ func TestHostLocationConvergesAllSupportedLeechDivergence(t *testing.T) {
 	}
 }
 
-func TestModeSwitchAlwaysSeedsFromHostBeforeLeechAuthority(t *testing.T) {
+func TestOriginSuppressionUsesControllerGenerationAndLeechTarget(t *testing.T) {
 	input := inputFromFixture(t, "equal-resolution.json")
-	input.Mode, input.PreviousMode = LeechLocation, HostLocation
-	input.Leech.Mode = Floating
-	input.Leech.Order = nil
+	input.LastApplied = &AppliedWrite{Target: Leech, Origin: Origin{ControllerID: input.ControllerID, Generation: input.Generation, From: Leech, Cause: "diagnostic-mismatch"}}
 	result := Plan(input)
-	mode, ok := change(result, ChangeLayoutMode)
-	if !ok || mode.Mode != Tiled || !result.ModeSwitchPending || result.Proposals[0].Target != Leech || result.Proposals[0].Origin.Cause != "mode_switch_seed_from_host" {
-		t.Fatalf("non-deterministic switch: %#v", result)
-	}
-	if result.SuggestedBaseline == nil || result.SuggestedBaseline.Mode != Tiled {
-		t.Fatalf("host baseline missing: %#v", result.SuggestedBaseline)
+	if result.Status != PlanConflict || !conflict(result, ConflictWriteAwaitingVerify, "origin") || len(result.Proposals) != 0 {
+		t.Fatalf("same triple bypassed suppression: %#v", result)
 	}
 }
 
-func TestRollbackToHostLocationConvergesLeechFromHost(t *testing.T) {
+func TestStaleOrMismatchedOriginsFailClosed(t *testing.T) {
 	input := inputFromFixture(t, "equal-resolution.json")
-	input.Mode, input.PreviousMode = HostLocation, LeechLocation
-	input.Leech.Mode = Floating
-	input.Leech.Order = nil
-	input.Baseline = &Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Floating, WidthPercent: 40, HeightPercent: 40}
+	input.LastApplied = &AppliedWrite{Target: Leech, Origin: Origin{ControllerID: "stale-controller", Generation: input.Generation}}
 	result := Plan(input)
-	mode, ok := change(result, ChangeLayoutMode)
-	if !ok || mode.Mode != Tiled || result.Proposals[0].Target != Leech || !result.ModeSwitchPending {
-		t.Fatalf("rollback did not restore host authority: %#v", result)
+	if result.Status != PlanConflict || !conflict(result, ConflictOriginControllerMismatch, "origin") || len(result.Proposals) != 0 {
+		t.Fatalf("mismatched controller did not fail closed: %#v", result)
 	}
-}
-
-func TestAuthorizedLeechLocationWritesExactHostWindowWithOrigin(t *testing.T) {
-	input := inputFromFixture(t, "equal-resolution.json")
-	input.Mode, input.PreviousMode = LeechLocation, LeechLocation
-	input.LeechWriteAuthorized = true
-	baseline := Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Tiled, WidthPercent: 50, HeightPercent: 50, Order: &sliceprotocol.Position{Column: 1, Tile: 1}}
-	input.Baseline = &baseline
-	input.Leech.Mode = Floating
-	input.Leech.Order = nil
-	input.Leech.WindowWidth = 1152 // 60%
-	input.Leech.WindowHeight = 756 // 70%
-	input.Leech.Output.LogicalWidth = 1920
-	input.Leech.Output.LogicalHeight = 1080
-	input.LeechWorkspaces = append(input.LeechWorkspaces, workspace(8, "Ops"))
-	input.Leech.Workspace = workspace(8, "Ops")
-	input.HostWorkspaces = append(input.HostWorkspaces, workspace(7, "Ops"))
-
-	result := Plan(input)
-	if result.Status != PlanComplete || len(result.Proposals) != 1 {
-		t.Fatalf("writeback failed: %#v", result)
-	}
-	proposal := result.Proposals[0]
-	if proposal.Target != Host || proposal.TargetCompositorEpoch != input.Host.SourceEpoch || proposal.RuntimeWindowID != 10 || proposal.Origin.From != Leech || proposal.Origin.Mode != LeechLocation || proposal.Focus || !proposal.VerifyAfterWrite {
-		t.Fatalf("writeback boundary = %#v", proposal)
-	}
-	if move, ok := change(result, ChangeWorkspace); !ok || move.WorkspaceRuntimeID != 7 {
-		t.Fatalf("host workspace exact ID absent: %#v", result)
-	}
-	if mode, ok := change(result, ChangeLayoutMode); !ok || mode.Mode != Floating {
-		t.Fatalf("floating write absent: %#v", result)
-	}
-	if width, ok := change(result, ChangeWidth); !ok || width.Percent != 60 {
-		t.Fatalf("width write absent: %#v", result)
-	}
-	if height, ok := change(result, ChangeHeight); !ok || height.Percent != 70 {
-		t.Fatalf("height write absent: %#v", result)
-	}
-}
-
-func TestLeechWritebackRequiresAuthorizationAndExactOwnership(t *testing.T) {
-	makeInput := func() Input {
-		input := inputFromFixture(t, "equal-resolution.json")
-		input.Mode, input.PreviousMode = LeechLocation, LeechLocation
-		baseline := Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Tiled, WidthPercent: 50, HeightPercent: 50}
-		input.Baseline = &baseline
-		input.Leech.Mode, input.Leech.Order = Floating, nil
-		return input
-	}
-	input := makeInput()
-	result := Plan(input)
-	if !conflict(result, ConflictWriteNotAuthorized, "mode") || len(result.Proposals) != 0 {
-		t.Fatalf("unauthorized write accepted: %#v", result)
-	}
-	input = makeInput()
-	input.LeechWriteAuthorized = true
-	input.Ownership.SourceID = "unrelated-source"
-	result = Plan(input)
-	if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
-		t.Fatalf("unrelated ownership accepted: %#v", result)
-	}
-	input = makeInput()
-	input.LeechWriteAuthorized = true
-	input.Ownership.ProjectionPositivelyOwned = false
-	result = Plan(input)
-	if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
-		t.Fatalf("title-like ownership accepted: %#v", result)
-	}
-}
-
-func TestConcurrentPropertyConflictIsReportedWithoutOverwritingThatProperty(t *testing.T) {
-	input := inputFromFixture(t, "equal-resolution.json")
-	input.Mode, input.PreviousMode, input.LeechWriteAuthorized = LeechLocation, LeechLocation, true
-	baseline := Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Tiled, WidthPercent: 50, HeightPercent: 50}
-	input.Baseline = &baseline
-	input.Host.WindowWidth = 1152  // 60%
-	input.Leech.WindowWidth = 1344 // 70%
-	input.Leech.WindowHeight = 756 // 70%, leech-only change remains writable
-	result := Plan(input)
-	if result.Status != PlanConflict || !conflict(result, ConflictConcurrentProperty, "width_percent") {
-		t.Fatalf("concurrent conflict absent: %#v", result)
-	}
-	if _, ok := change(result, ChangeWidth); ok {
-		t.Fatal("conflicted width was overwritten")
-	}
-	if height, ok := change(result, ChangeHeight); !ok || height.Percent != 70 {
-		t.Fatalf("independent property did not converge: %#v", result)
-	}
-}
-
-func hostTargetInput(t *testing.T) Input {
-	t.Helper()
-	input := inputFromFixture(t, "equal-resolution.json")
-	input.Mode, input.PreviousMode, input.LeechWriteAuthorized = LeechLocation, LeechLocation, true
-	input.Baseline = &Spatial{WorkspaceName: "Dev", WorkspaceKey: "dev", Mode: Tiled, WidthPercent: 50, HeightPercent: 50}
-	input.Leech.Mode, input.Leech.Order = Floating, nil
-	return input
-}
-
-func TestOriginSuppressionUsesOnlyControllerGenerationAndTarget(t *testing.T) {
-	tests := []struct {
-		name   string
-		input  func(*testing.T) Input
-		target Side
-	}{
-		{"leech target", func(t *testing.T) Input { return inputFromFixture(t, "equal-resolution.json") }, Leech},
-		{"host target", hostTargetInput, Host},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := test.input(t)
-			// Diagnostic fields deliberately disagree with the new proposal.
-			// The exact controller/generation/target triple still suppresses it.
-			input.LastApplied = &AppliedWrite{Target: test.target, Origin: Origin{ControllerID: input.ControllerID, Generation: input.Generation, From: test.target, Mode: "diagnostic-mismatch", Cause: "diagnostic-mismatch"}}
-			result := Plan(input)
-			if result.Status != PlanConflict || !conflict(result, ConflictWriteAwaitingVerify, "origin") || len(result.Proposals) != 0 {
-				t.Fatalf("same triple bypassed suppression: %#v", result)
-			}
-		})
-	}
-}
-
-func TestStaleOrMismatchedOriginsFailClosedForBothTargets(t *testing.T) {
-	targets := []struct {
-		name   string
-		input  func(*testing.T) Input
-		target Side
-	}{
-		{"leech target", func(t *testing.T) Input { return inputFromFixture(t, "equal-resolution.json") }, Leech},
-		{"host target", hostTargetInput, Host},
-	}
-	for _, target := range targets {
-		t.Run(target.name+" controller", func(t *testing.T) {
-			input := target.input(t)
-			input.LastApplied = &AppliedWrite{Target: target.target, Origin: Origin{ControllerID: "stale-controller", Generation: input.Generation}}
-			result := Plan(input)
-			if result.Status != PlanConflict || !conflict(result, ConflictOriginControllerMismatch, "origin") || len(result.Proposals) != 0 {
-				t.Fatalf("mismatched controller did not fail closed: %#v", result)
-			}
-		})
-		for _, generation := range []uint64{1, 3} {
-			t.Run(target.name+" generation", func(t *testing.T) {
-				input := target.input(t)
-				input.Generation = 2
-				input.LastApplied = &AppliedWrite{Target: target.target, Origin: Origin{ControllerID: input.ControllerID, Generation: generation}}
-				result := Plan(input)
-				if result.Status != PlanConflict || !conflict(result, ConflictOriginGenerationMismatch, "origin") || len(result.Proposals) != 0 {
-					t.Fatalf("generation %d did not fail closed: %#v", generation, result)
-				}
-			})
+	for _, generation := range []uint64{1, 3} {
+		input = inputFromFixture(t, "equal-resolution.json")
+		input.Generation = 2
+		input.LastApplied = &AppliedWrite{Target: Leech, Origin: Origin{ControllerID: input.ControllerID, Generation: generation}}
+		result = Plan(input)
+		if result.Status != PlanConflict || !conflict(result, ConflictOriginGenerationMismatch, "origin") || len(result.Proposals) != 0 {
+			t.Fatalf("generation %d did not fail closed: %#v", generation, result)
 		}
 	}
 }
 
 func TestMismatchedPendingOriginFailsClosedEvenWhenSpatiallyConverged(t *testing.T) {
-	leechTarget := inputFromFixture(t, "equal-resolution.json")
-	leechTarget.Leech.WindowWidth, leechTarget.Leech.WindowHeight = leechTarget.Host.WindowWidth, leechTarget.Host.WindowHeight
-	leechTarget.LastApplied = &AppliedWrite{Target: Leech, Origin: Origin{ControllerID: "stale", Generation: leechTarget.Generation}}
-	if result := Plan(leechTarget); !conflict(result, ConflictOriginControllerMismatch, "origin") || len(result.Proposals) != 0 {
+	input := inputFromFixture(t, "equal-resolution.json")
+	input.Leech.WindowWidth, input.Leech.WindowHeight = input.Host.WindowWidth, input.Host.WindowHeight
+	input.LastApplied = &AppliedWrite{Target: Leech, Origin: Origin{ControllerID: "stale", Generation: input.Generation}}
+	if result := Plan(input); !conflict(result, ConflictOriginControllerMismatch, "origin") || len(result.Proposals) != 0 {
 		t.Fatalf("converged leech target ignored mismatched origin: %#v", result)
-	}
-
-	hostTarget := hostTargetInput(t)
-	hostTarget.Leech.Mode, hostTarget.Leech.Order = Tiled, &sliceprotocol.Position{Column: 1, Tile: 1}
-	hostTarget.Leech.WindowWidth, hostTarget.Leech.WindowHeight = hostTarget.Host.WindowWidth, hostTarget.Host.WindowHeight
-	hostTarget.LastApplied = &AppliedWrite{Target: Host, Origin: Origin{ControllerID: hostTarget.ControllerID, Generation: hostTarget.Generation + 1}}
-	if result := Plan(hostTarget); !conflict(result, ConflictOriginGenerationMismatch, "origin") || len(result.Proposals) != 0 {
-		t.Fatalf("converged host target ignored mismatched origin: %#v", result)
 	}
 }
 
 func TestOwnershipAndExactWindowProposalsAreBoundToCompositorEpoch(t *testing.T) {
-	t.Run("leech numeric ID reuse", func(t *testing.T) {
-		input := inputFromFixture(t, "equal-resolution.json")
-		input.Leech.SourceEpoch = "33333333-3333-4333-8333-333333333333"
-		result := Plan(input)
-		if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
-			t.Fatalf("stale leech ownership authorized reused ID: %#v", result)
-		}
-		input.Ownership.LeechCompositorEpoch = input.Leech.SourceEpoch
-		result = Plan(input)
-		if len(result.Proposals) != 1 || result.Proposals[0].TargetCompositorEpoch != input.Leech.SourceEpoch {
-			t.Fatalf("renewed leech ownership did not bind proposal epoch: %#v", result)
-		}
-	})
-	t.Run("host numeric ID reuse", func(t *testing.T) {
-		input := hostTargetInput(t)
-		input.Host.SourceEpoch = "44444444-4444-4444-8444-444444444444"
-		result := Plan(input)
-		if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
-			t.Fatalf("stale host ownership authorized reused ID: %#v", result)
-		}
-		input.Ownership.HostCompositorEpoch = input.Host.SourceEpoch
-		result = Plan(input)
-		if len(result.Proposals) != 1 || result.Proposals[0].TargetCompositorEpoch != input.Host.SourceEpoch {
-			t.Fatalf("renewed host ownership did not bind proposal epoch: %#v", result)
-		}
-	})
+	input := inputFromFixture(t, "equal-resolution.json")
+	input.Leech.SourceEpoch = "33333333-3333-4333-8333-333333333333"
+	result := Plan(input)
+	if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
+		t.Fatalf("stale leech ownership authorized reused ID: %#v", result)
+	}
+	input.Ownership.LeechCompositorEpoch = input.Leech.SourceEpoch
+	result = Plan(input)
+	if len(result.Proposals) != 1 || result.Proposals[0].TargetCompositorEpoch != input.Leech.SourceEpoch {
+		t.Fatalf("renewed leech ownership did not bind proposal epoch: %#v", result)
+	}
+
+	input = inputFromFixture(t, "equal-resolution.json")
+	input.Host.SourceEpoch = "44444444-4444-4444-8444-444444444444"
+	result = Plan(input)
+	if !conflict(result, ConflictOwnership, "source_id") || len(result.Proposals) != 0 {
+		t.Fatalf("stale host ownership authorized reused ID: %#v", result)
+	}
+	input.Ownership.HostCompositorEpoch = input.Host.SourceEpoch
+	result = Plan(input)
+	if len(result.Proposals) != 1 || result.Proposals[0].Target != Leech {
+		t.Fatalf("renewed host ownership did not restore leech convergence: %#v", result)
+	}
 }
 
 func TestDegradedObservationsNeverProposeMutation(t *testing.T) {
@@ -529,7 +363,7 @@ func TestInvalidTopologyAndRuntimeIdentityFailClosed(t *testing.T) {
 }
 
 func TestProposalValidationRejectsFocusUnscopedAndEpochlessMutations(t *testing.T) {
-	proposal := Proposal{Target: Leech, SourceID: "source", Origin: Origin{ControllerID: "controller", Generation: 1}, VerifyAfterWrite: true, Focus: true, RuntimeWindowID: 2, Changes: []Change{{Kind: ChangeWorkspace, WorkspaceRuntimeID: 3}}}
+	proposal := Proposal{Target: Leech, SourceID: "source", Origin: Origin{ControllerID: "controller", Generation: 1, From: Host, Mode: "host_location"}, VerifyAfterWrite: true, Focus: true, RuntimeWindowID: 2, Changes: []Change{{Kind: ChangeWorkspace, WorkspaceRuntimeID: 3}}}
 	if proposal.ValidateNonDisruptive() == nil {
 		t.Fatal("focus-changing proposal accepted")
 	}

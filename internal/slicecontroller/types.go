@@ -188,6 +188,8 @@ type SpatialRecovery struct {
 }
 
 type SpatialRecord struct {
+	// Baseline fields remain serialized for schema-v2 compatibility but are not
+	// consulted by the host-authoritative planner.
 	Baseline        *slicelayout.Spatial      `json:"baseline,omitempty"`
 	PendingBaseline *slicelayout.Spatial      `json:"pending_baseline,omitempty"`
 	LastApplied     *slicelayout.AppliedWrite `json:"last_applied,omitempty"`
@@ -215,7 +217,7 @@ type State struct {
 	PendingCleanups      map[string]CleanupGate        `json:"pending_cleanups"`
 	LaunchHandoffs       map[string]LaunchHandoff      `json:"launch_handoffs"`
 	RetiredHandoffTokens []string                      `json:"retired_handoff_tokens"`
-	AuthorityMode        slicelayout.AuthorityMode     `json:"authority_mode"`
+	AuthorityMode        string                        `json:"authority_mode"`
 	LeechWriteAuthorized bool                          `json:"leech_write_authorized"`
 	Spatial              map[string]SpatialRecord      `json:"spatial"`
 	Undo                 []UndoAction                  `json:"undo"`
@@ -224,7 +226,7 @@ type State struct {
 
 func NewState(namespace Namespace, controllerID string) State {
 	return State{SchemaVersion: SchemaVersion, Namespace: namespace, ControllerID: controllerID, Generation: 1,
-		SelectedWorkspaces: map[string]string{}, Pickups: map[string]bool{}, ClosedByUser: map[string]SessionDrop{}, Sources: map[string]TrackedSource{}, Projections: map[string]Projection{}, SuccessorGates: map[string]SuccessorGate{}, Lineage: map[string]LineageRecord{}, PendingCleanups: map[string]CleanupGate{}, LaunchHandoffs: map[string]LaunchHandoff{}, RetiredHandoffTokens: []string{}, AuthorityMode: slicelayout.HostLocation, Spatial: map[string]SpatialRecord{}, Undo: []UndoAction{}, Audit: []AuditEntry{}}
+		SelectedWorkspaces: map[string]string{}, Pickups: map[string]bool{}, ClosedByUser: map[string]SessionDrop{}, Sources: map[string]TrackedSource{}, Projections: map[string]Projection{}, SuccessorGates: map[string]SuccessorGate{}, Lineage: map[string]LineageRecord{}, PendingCleanups: map[string]CleanupGate{}, LaunchHandoffs: map[string]LaunchHandoff{}, RetiredHandoffTokens: []string{}, AuthorityMode: "host_location", Spatial: map[string]SpatialRecord{}, Undo: []UndoAction{}, Audit: []AuditEntry{}}
 }
 
 func (s State) Validate() error {
@@ -234,7 +236,7 @@ func (s State) Validate() error {
 	if s.ObservationQuality != "" && s.ObservationQuality != sliceprotocol.QualityComplete && s.ObservationQuality != sliceprotocol.QualityDegraded {
 		return errors.New("invalid observation quality")
 	}
-	if s.AuthorityMode != slicelayout.HostLocation || s.LeechWriteAuthorized {
+	if s.AuthorityMode != "host_location" || s.LeechWriteAuthorized {
 		return errors.New("v1 controller state requires host_location authority without leech write authorization")
 	}
 	if err := sliceprotocol.ValidateAcceptanceState(s.Acceptance); err != nil {

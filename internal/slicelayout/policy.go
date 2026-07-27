@@ -10,13 +10,6 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 )
 
-type AuthorityMode string
-
-const (
-	HostLocation  AuthorityMode = "host_location"
-	LeechLocation AuthorityMode = "leech_location"
-)
-
 type Side string
 
 const (
@@ -64,8 +57,6 @@ const (
 	ConflictWorkspaceDuplicate       ConflictCode = "workspace_duplicate"
 	ConflictWorkspaceCollision       ConflictCode = "workspace_normalization_collision"
 	ConflictOwnership                ConflictCode = "ownership_mismatch"
-	ConflictConcurrentProperty       ConflictCode = "concurrent_property_change"
-	ConflictWriteNotAuthorized       ConflictCode = "leech_write_not_authorized"
 	ConflictWriteAwaitingVerify      ConflictCode = "write_awaiting_verification"
 	ConflictOriginControllerMismatch ConflictCode = "origin_controller_mismatch"
 	ConflictOriginGenerationMismatch ConflictCode = "origin_generation_mismatch"
@@ -111,11 +102,11 @@ type Ownership struct {
 }
 
 type Origin struct {
-	ControllerID string        `json:"controller_id"`
-	Generation   uint64        `json:"generation"`
-	From         Side          `json:"from"`
-	Mode         AuthorityMode `json:"mode"`
-	Cause        string        `json:"cause"`
+	ControllerID string `json:"controller_id"`
+	Generation   uint64 `json:"generation"`
+	From         Side   `json:"from"`
+	Mode         string `json:"mode"`
+	Cause        string `json:"cause"`
 }
 
 type AppliedWrite struct {
@@ -159,35 +150,26 @@ type Fidelity struct {
 }
 
 type Input struct {
-	Mode                 AuthorityMode `json:"mode"`
-	PreviousMode         AuthorityMode `json:"previous_mode"`
-	ControllerID         string        `json:"controller_id"`
-	Generation           uint64        `json:"generation"`
-	Host                 Observation   `json:"host"`
-	Leech                *Observation  `json:"leech,omitempty"`
-	Baseline             *Spatial      `json:"baseline,omitempty"`
-	HostWorkspaces       []Workspace   `json:"host_workspaces"`
-	LeechWorkspaces      []Workspace   `json:"leech_workspaces"`
-	Ownership            Ownership     `json:"ownership"`
-	LeechWriteAuthorized bool          `json:"leech_write_authorized"`
-	LastApplied          *AppliedWrite `json:"last_applied,omitempty"`
+	ControllerID    string        `json:"controller_id"`
+	Generation      uint64        `json:"generation"`
+	Host            Observation   `json:"host"`
+	Leech           *Observation  `json:"leech,omitempty"`
+	HostWorkspaces  []Workspace   `json:"host_workspaces"`
+	LeechWorkspaces []Workspace   `json:"leech_workspaces"`
+	Ownership       Ownership     `json:"ownership"`
+	LastApplied     *AppliedWrite `json:"last_applied,omitempty"`
 }
 
 type Result struct {
-	Status            PlanStatus   `json:"status"`
-	Proposals         []Proposal   `json:"proposals"`
-	Conflicts         []Conflict   `json:"conflicts"`
-	Fidelity          Fidelity     `json:"fidelity"`
-	SuggestedBaseline *Spatial     `json:"suggested_baseline,omitempty"`
-	ModeSwitchPending bool         `json:"mode_switch_pending"`
-	OrderDrift        []OrderDrift `json:"order_drift"`
+	Status     PlanStatus   `json:"status"`
+	Proposals  []Proposal   `json:"proposals"`
+	Conflicts  []Conflict   `json:"conflicts"`
+	Fidelity   Fidelity     `json:"fidelity"`
+	OrderDrift []OrderDrift `json:"order_drift"`
 }
 
 func Plan(input Input) Result {
 	result := Result{Status: PlanComplete}
-	if input.Mode != HostLocation && input.Mode != LeechLocation {
-		return conflictResult(result, ConflictInvalidInput, "mode", "unknown authority mode")
-	}
 	if input.ControllerID == "" || input.Generation == 0 {
 		return conflictResult(result, ConflictInvalidInput, "origin", "controller identity and generation are required")
 	}
@@ -196,7 +178,7 @@ func Plan(input Input) Result {
 		result.Conflicts = append(result.Conflicts, Conflict{Code: ConflictIncompleteObservation, Detail: "incomplete observations never authorize spatial writes"})
 		return result
 	}
-	if mismatch := pendingOriginMismatch(input.LastApplied, input.ControllerID, input.Generation, intendedTarget(input)); mismatch != nil {
+	if mismatch := pendingOriginMismatch(input.LastApplied, input.ControllerID, input.Generation, Leech); mismatch != nil {
 		result.Status = PlanConflict
 		result.Conflicts = append(result.Conflicts, *mismatch)
 		return result
@@ -215,9 +197,8 @@ func Plan(input Input) Result {
 	}
 	if input.Leech == nil {
 		result.Fidelity = fidelity(input.Host.Output, sliceprotocol.Output{})
-		p := proposal(input, Leech, 0, hostSpatial, []Change{{Kind: ChangeInitialProjection, WorkspaceName: hostSpatial.WorkspaceName, WorkspaceKey: hostSpatial.WorkspaceKey, Mode: hostSpatial.Mode, WidthPercent: hostSpatial.WidthPercent, HeightPercent: hostSpatial.HeightPercent}}, "initial_projection")
+		p := proposal(input, 0, []Change{{Kind: ChangeInitialProjection, WorkspaceName: hostSpatial.WorkspaceName, WorkspaceKey: hostSpatial.WorkspaceKey, Mode: hostSpatial.Mode, WidthPercent: hostSpatial.WidthPercent, HeightPercent: hostSpatial.HeightPercent}}, "initial_projection")
 		appendProposal(&result, input.LastApplied, p)
-		result.ModeSwitchPending = input.Mode != input.PreviousMode
 		return result
 	}
 	leechSpatial, err := spatial(*input.Leech)
@@ -230,41 +211,10 @@ func Plan(input Input) Result {
 	}
 	result.OrderDrift = CompareOrder([]OrderItem{{SourceID: input.Host.SourceID, Position: hostSpatial.Order}}, []OrderItem{{SourceID: input.Leech.SourceID, Position: leechSpatial.Order}})
 
-	if input.Mode == HostLocation || input.PreviousMode != input.Mode || input.Baseline == nil {
-		cause := "host_authority"
-		if input.PreviousMode != input.Mode {
-			cause = "mode_switch_seed_from_host"
-			result.ModeSwitchPending = true
-		}
-		result.SuggestedBaseline = &hostSpatial
-		changes, conflicts := changesForTarget(hostSpatial, leechSpatial, input.LeechWorkspaces)
-		result.Conflicts = append(result.Conflicts, conflicts...)
-		if len(changes) != 0 {
-			p := proposal(input, Leech, input.Leech.RuntimeWindowID, hostSpatial, changes, cause)
-			appendProposal(&result, input.LastApplied, p)
-		}
-		if len(result.Conflicts) != 0 {
-			result.Status = PlanConflict
-		}
-		return result
-	}
-
-	if !input.LeechWriteAuthorized {
-		return conflictResult(result, ConflictWriteNotAuthorized, "mode", "leech-location writeback requires explicit authorization")
-	}
-	baseline := *input.Baseline
-	desired, propertyConflicts := leechAuthorityDesired(baseline, hostSpatial, leechSpatial)
-	result.Conflicts = append(result.Conflicts, propertyConflicts...)
-	if len(propertyConflicts) == 0 && equalSpatial(hostSpatial, leechSpatial) {
-		result.SuggestedBaseline = &leechSpatial
-	}
-	changes, workspaceConflicts := changesForTarget(desired, hostSpatial, input.HostWorkspaces)
-	result.Conflicts = append(result.Conflicts, workspaceConflicts...)
-	for _, c := range propertyConflicts {
-		changes = removeProperty(changes, c.Property)
-	}
+	changes, conflicts := changesForTarget(hostSpatial, leechSpatial, input.LeechWorkspaces)
+	result.Conflicts = append(result.Conflicts, conflicts...)
 	if len(changes) != 0 {
-		p := proposal(input, Host, input.Host.RuntimeWindowID, desired, changes, "authorized_leech_writeback")
+		p := proposal(input, input.Leech.RuntimeWindowID, changes, "host_authority")
 		appendProposal(&result, input.LastApplied, p)
 	}
 	if len(result.Conflicts) != 0 {
@@ -324,24 +274,12 @@ func owns(input Input) bool {
 		input.Ownership.LeechRuntimeWindowID == input.Leech.RuntimeWindowID
 }
 
-func proposal(input Input, target Side, runtimeID uint64, desired Spatial, changes []Change, cause string) Proposal {
-	from := Host
-	targetEpoch := input.Host.SourceEpoch
-	if target == Host {
-		from = Leech
-	} else if input.Leech != nil {
+func proposal(input Input, runtimeID uint64, changes []Change, cause string) Proposal {
+	targetEpoch := ""
+	if input.Leech != nil {
 		targetEpoch = input.Leech.SourceEpoch
-	} else {
-		targetEpoch = ""
 	}
-	return Proposal{Target: target, TargetCompositorEpoch: targetEpoch, SourceID: input.Host.SourceID, RuntimeWindowID: runtimeID, Origin: Origin{ControllerID: input.ControllerID, Generation: input.Generation, From: from, Mode: input.Mode, Cause: cause}, Changes: changes, VerifyAfterWrite: true, Focus: false}
-}
-
-func intendedTarget(input Input) Side {
-	if input.Mode == LeechLocation && input.PreviousMode == input.Mode && input.Baseline != nil && input.Leech != nil {
-		return Host
-	}
-	return Leech
+	return Proposal{Target: Leech, TargetCompositorEpoch: targetEpoch, SourceID: input.Host.SourceID, RuntimeWindowID: runtimeID, Origin: Origin{ControllerID: input.ControllerID, Generation: input.Generation, From: Host, Mode: "host_location", Cause: cause}, Changes: changes, VerifyAfterWrite: true, Focus: false}
 }
 
 func pendingOriginMismatch(last *AppliedWrite, controllerID string, generation uint64, target Side) *Conflict {
@@ -431,60 +369,6 @@ func ValidateWorkspaceCatalog(catalog []Workspace) []Conflict {
 	return conflicts
 }
 
-func leechAuthorityDesired(baseline, host, leech Spatial) (Spatial, []Conflict) {
-	desired := leech
-	var conflicts []Conflict
-	properties := []struct {
-		name              string
-		base, host, leech any
-	}{
-		{"workspace", baseline.WorkspaceKey, host.WorkspaceKey, leech.WorkspaceKey},
-		{"layout_mode", baseline.Mode, host.Mode, leech.Mode},
-		{"width_percent", baseline.WidthPercent, host.WidthPercent, leech.WidthPercent},
-		{"height_percent", baseline.HeightPercent, host.HeightPercent, leech.HeightPercent},
-	}
-	for _, property := range properties {
-		hostChanged := !propertyEqual(property.name, property.base, property.host)
-		leechChanged := !propertyEqual(property.name, property.base, property.leech)
-		if hostChanged && leechChanged && !propertyEqual(property.name, property.host, property.leech) {
-			conflicts = append(conflicts, Conflict{Code: ConflictConcurrentProperty, Property: property.name, Detail: "host and leech changed the same property differently"})
-			switch property.name {
-			case "workspace":
-				desired.WorkspaceName, desired.WorkspaceKey = host.WorkspaceName, host.WorkspaceKey
-			case "layout_mode":
-				desired.Mode = host.Mode
-			case "width_percent":
-				desired.WidthPercent = host.WidthPercent
-			case "height_percent":
-				desired.HeightPercent = host.HeightPercent
-			}
-		}
-	}
-	return desired, conflicts
-}
-
-func propertyEqual(name string, a, b any) bool {
-	if name == "width_percent" || name == "height_percent" {
-		return near(a.(float64), b.(float64))
-	}
-	return a == b
-}
-
-func removeProperty(changes []Change, property string) []Change {
-	out := changes[:0]
-	for _, change := range changes {
-		remove := (property == "workspace" && (change.Kind == ChangeWorkspace || change.Kind == ChangeEnsureWorkspace)) || (property == "layout_mode" && change.Kind == ChangeLayoutMode) || (property == "width_percent" && change.Kind == ChangeWidth) || (property == "height_percent" && change.Kind == ChangeHeight)
-		if !remove {
-			out = append(out, change)
-		}
-	}
-	return out
-}
-
-func equalSpatial(a, b Spatial) bool {
-	return a.WorkspaceKey == b.WorkspaceKey && a.Mode == b.Mode && near(a.WidthPercent, b.WidthPercent) && near(a.HeightPercent, b.HeightPercent)
-}
-
 func near(a, b float64) bool { return math.Abs(a-b) <= 0.01 }
 
 func fidelity(source, target sliceprotocol.Output) Fidelity {
@@ -565,10 +449,10 @@ func copyPosition(position *sliceprotocol.Position) *sliceprotocol.Position {
 }
 
 func (proposal Proposal) ValidateNonDisruptive() error {
-	if proposal.Target != Host && proposal.Target != Leech {
-		return errors.New("invalid target")
+	if proposal.Target != Leech {
+		return errors.New("spatial proposals must target the leech projection")
 	}
-	if proposal.SourceID == "" || proposal.Origin.ControllerID == "" || proposal.Origin.Generation == 0 || !proposal.VerifyAfterWrite || proposal.Focus {
+	if proposal.SourceID == "" || proposal.Origin.ControllerID == "" || proposal.Origin.Generation == 0 || proposal.Origin.From != Host || proposal.Origin.Mode != "host_location" || !proposal.VerifyAfterWrite || proposal.Focus {
 		return errors.New("proposal lacks non-disruptive origin/verification invariants")
 	}
 	if proposal.RuntimeWindowID != 0 && proposal.TargetCompositorEpoch == "" {

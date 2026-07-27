@@ -6,7 +6,7 @@
 
 ## Context
 
-[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) establishes semantic spatial projection, with host-location shipping in v1 and leech-location reserved as dormant v1.1 specification. [ADR 0003](0003-terminal-slice-workspace-sharing-and-persistence.md) establishes canonical static-workspace identity, exact source identity, atomic controller authority, and safe failure semantics. The passing [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md) proves the exact inventory and mutation shapes available in pinned Niri 25.11.
+[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) establishes semantic spatial projection. [ADR 0003](0003-terminal-slice-workspace-sharing-and-persistence.md) establishes canonical static-workspace identity, exact source identity, atomic controller authority, and safe failure semantics. The passing [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md) proves the exact inventory and mutation shapes available in pinned Niri 25.11.
 
 This ADR fixes the deterministic spatial policy for one host output and one leech output. It also introduces the pure `internal/slicelayout` proposal model used by reconciliation; the policy model itself performs no machine enablement.
 
@@ -84,7 +84,7 @@ Niri does not expose working-area dimensions. Bars and exclusive zones can there
 
 The host's exact one-based `(column,tile)` is observation, not a durable cross-machine ID. Initial projection launch intents are sorted by `(column,tile,source_id)`, with floating/no-position sources after tiled sources. The controller preserves this initial launch order where practical and records the resulting observed order.
 
-Later host/leech order differences are reported deterministically by source ID as order drift. No correction proposal is emitted. Pinned Niri has no ID-targeted action for moving an existing column; `MoveColumnToIndex` acts on focus. The visible, racy focus dance needed for exact reorder is excluded from MVP. Column-order writeback is excluded from shipped host-location v1 and the dormant v1.1 leech-location specification.
+Later host/leech order differences are reported deterministically by source ID as order drift. No correction proposal is emitted. Pinned Niri has no ID-targeted action for moving an existing column; `MoveColumnToIndex` acts on focus. The visible, racy focus dance needed for exact reorder is excluded from MVP.
 
 ### 6. Host-location mode
 
@@ -94,61 +94,22 @@ Every host-to-leech proposal carries:
 
 - target `leech`;
 - opaque source identity, exact current leech compositor epoch, and exact current leech runtime window ID;
-- origin controller ID, durable generation, `from=host`, mode, and cause;
+- origin controller ID, durable generation, `from=host`, fixed compatibility `mode=host_location`, and cause;
 - only workspace/layout/width/height intents;
 - `focus=false`; and
 - `verify_after_write=true`.
 
-### 7. Dormant v1.1 leech-location mode
+### 7. Pure proposal boundary
 
-The remainder of this leech-location design is executable specification only. V1 exposes no configuration option, accepted controller state, production `spatial_apply` registration, or host-target effect execution for it.
-
-
-Leech-location delegates only workspace membership, tiled/floating state, and proportional width/height. Host ownership of Kitty, Zellij, processes, source/session lifecycle, and session attachment never moves to the leech.
-
-Entering leech-location is a two-step deterministic transition:
-
-1. seed the leech from the latest complete host placement and verify it; then
-2. atomically commit that verified value as the shared baseline and enable authorized leech writeback.
-
-Pre-existing leech-only rearrangement is therefore never unexpectedly pushed to the host merely by switching modes. In steady leech-location mode, writeback additionally requires explicit authorization, a complete host and leech observation, exact source binding, positive projection ownership, and exact current runtime IDs on both sides.
-
-Per property, changes are compared with the last verified shared baseline:
-
-- leech-only change: propose that property to the host;
-- host-only change: leech authority wins and the current leech value is proposed back to the host;
-- same value reached on both sides: accept it as the next baseline after verification;
-- both sides changed the same property to different values: report `concurrent_property_change` and emit no write for that property; and
-- a conflict on one property does not discard an independent, non-conflicting property proposal.
-
-Column/tile order is never written back.
-
-Every leech-to-host proposal includes `from=leech`, authority mode, controller ID, durable generation, exact target compositor epoch/runtime ID, and verify-after-write. The controller persists the proposed origin before execution. Suppression is keyed exactly by `{controller,generation,target}`: the same triple cannot be proposed again while awaiting verification even if diagnostic `from`, mode, or cause fields differ. A pending origin for that target with a different controller or generation is a typed conflict and fails closed on both host and leech targets. A matching verified echo advances the baseline rather than becoming a new user change. This bookkeeping supplies loop prevention because Niri itself has no custom origin field.
-
-### 8. Dormant v1.1 switching, rollback, and conflicts
-
-This section is reserved future v1.1 specification and is not executable through production v1 wiring. In that future model, mode changes are serialized with controller current authority. A mode flag is not considered committed until the initial synchronization direction has verified:
-
-- host-location to leech-location: host seeds leech, then leech authority begins;
-- leech-location to host-location: host immediately becomes the desired baseline and the owned leech projection converges to it; and
-- rollback after any leech writeback failure uses the same leech-to-host-location transition without trying to undo host history blindly.
-
-A rollback never changes host work ownership, Zellij attachment, selection, close exclusions, retry budgets, or routed-launch tokens. If host-to-leech rollback placement cannot verify, mode authority is host-location but placement is reported degraded and retried only under bounded controller policy.
-
-Workspace collision, incomplete ownership, unauthorized writeback, concurrent property changes, origin replay, unsupported topology, and incomplete observation are typed and inspectable. No conflict is resolved by title matching, picking the first workspace, focusing a target, moving an unrelated window, closing either source or projection, or changing session ownership.
-
-### 9. Pure proposal boundary
-
-`internal/slicelayout` contains the production v1 pure host-location policy and the dormant v1.1 leech-location specification. It:
+`internal/slicelayout` contains the pure host-authoritative spatial policy. It:
 
 - validates workspace catalogs and spatial observations;
 - computes bounded proportions and fidelity reasons;
 - creates typed non-focus proposals bound to the exact target compositor epoch/runtime ID, origin, and verification requirements;
 - gates every existing-window proposal on epoch-bound ownership;
-- models the reserved v1.1 mode switching, authorization, baselines, per-property concurrency, and origin suppression in pure tests only; and
 - sorts initial order and reports drift without creating order corrections.
 
-It performs no Niri I/O, process execution, attachment, window creation/closure, persistence, transport, retry scheduling, or focus operation. Production v1 translates only host-location proposals targeting the owned leech projection into typed `internal/niriipc` actions. Host-target proposals, leech-location controller authority, and `spatial_apply` remain unavailable reserved v1.1 specification.
+It performs no Niri I/O, process execution, attachment, window creation/closure, persistence, transport, retry scheduling, or focus operation. Production translates only host-authoritative proposals targeting the owned leech projection into typed `internal/niriipc` actions. Host-target proposals are rejected.
 
 ## Failure behavior and non-disruptive invariant
 
@@ -169,21 +130,21 @@ Spatial placement failure is never evidence that a source disappeared and never 
 
 `internal/slicelayout/testdata/equal-resolution.json` proves a 960x540 source window on 1920x1080 maps to 50% by 50% on an equal logical output while still reporting the unknown working-area/cell-grid approximation.
 
-`internal/slicelayout/testdata/differing-resolution.json` proves the same source maps to 50% by 50% on a 1440x900 scale-1.5 target and reports dimension and scale differences. Unit tests cover production v1 normalized collisions, exact workspace ensure sequencing, floating/tiled changes, initial order, later drift, unrelated IDs, degraded observations, and non-focus proposal invariants. Separate pure tests retain dormant v1.1 mode-switching, rollback, authorization, origin-replay, and concurrent-property specification without making those paths executable in v1.
+`internal/slicelayout/testdata/differing-resolution.json` proves the same source maps to 50% by 50% on a 1440x900 scale-1.5 target and reports dimension and scale differences. Unit tests cover production v1 normalized collisions, exact workspace ensure sequencing, floating/tiled changes, initial order, later drift, unrelated IDs, degraded observations, and non-focus proposal invariants.
 
 ## Live operator smoke criteria
 
 Before enabling the feature, run the locked spike and a bounded controller smoke in disposable named workspaces on one physical/nested output per machine:
 
-1. Verify packaged Niri prints exactly `niri 25.11`; run `nix run .#niri-direct-ipc-spike` in an existing Wayland session.
+1. Verify packaged Niri prints exactly `niri 25.11`; build `checks.x86_64-linux.host-leech-hermetic-matrix` for the locked version and production Go IPC checks, then use the documented spike script for a live existing-Wayland smoke.
 2. Capture complete host and leech observations and confirm exactly one active output on each, valid logical dimensions/scale, and no canonical workspace collision.
 3. Request a missing hostile-but-valid static workspace name; inspect the exact ID-targeted `SetWorkspaceName`, unchanged focus, exact-name verification, and replacement trailing empty workspace.
 4. Project one owned tiled terminal, then one owned floating terminal. Verify exact workspace IDs, `focus:false`, mode, width and height after each action. Keep an unrelated sentinel window focused and prove it never moves or closes.
 5. Repeat with equal logical dimensions, then differing logical dimensions/scale or bars. Confirm percentage intent and visible approximation reasons rather than pixel-equality claims.
 6. Launch multiple projections in source `(column,tile)` order, rearrange one afterward, and confirm drift is reported without a focus dance or correction.
-7. In host-location mode, rearrange only the leech and prove no host action occurs. Change the host and prove only the owned matching leech window receives a verified proposal.
-8. Prove v1 configuration, controller state, production RPC, and effect execution reject leech-location authority, `spatial_apply`, and every host-target proposal without a Niri mutation.
-9. Inject Niri timeout, silent no-op, topology change, and lost ownership. Confirm degraded/conflict outcomes, no unrelated focus/move/close, no Zellij lifecycle effect, and deterministic continued host-location authority.
+7. Rearrange only the leech and prove no host action occurs. Change the host and prove only the owned matching leech window receives a verified proposal.
+8. Prove configuration and controller state expose no alternate location authority, and every host-target proposal is rejected without a Niri mutation.
+9. Inject Niri timeout, silent no-op, topology change, and lost ownership. Confirm degraded/conflict outcomes, no unrelated focus/move/close, no Zellij lifecycle effect, and deterministic continued host authority.
 
 Record exact requests and sanitized outcomes. Never record Niri socket values, credentials, raw process metadata, or private graphical context.
 
@@ -192,15 +153,12 @@ Record exact requests and sanitized outcomes. Never record Niri socket values, c
 ### Positive
 
 - Spatial intent is deterministic across differing logical sizes without pretending to be pixel-identical.
-- Production v1 host-to-leech convergence and dormant v1.1 leech-to-host specification share one testable, non-focus pure proposal model without exposing host writeback.
-- Dormant v1.1 mode transitions and concurrent edits are specified without widening v1 authority.
+- Host-to-leech convergence uses one testable, non-focus pure proposal model without exposing host writeback.
 - Exact order remains observable without adopting a visible/racy mutation mechanism.
 
 ### Negative
 
 - Even equal-resolution projection remains approximate because working areas and cell grids are not fully observable.
-- Dormant v1.1 leech-location concurrency would require operator resolution per property.
-- Dormant v1.1 mode switching would require a verified seed step rather than an instantaneous flag flip.
 - Exact live order, multi-monitor mapping, and independent concurrent-client terminal grids remain unavailable.
 
 ## Non-goals

@@ -28,24 +28,6 @@ Exercise the packaged host/leech workflow through real redeem subprocess, CLI, U
 
 Add a dedicated tests/integration or internal test harness plus a Nix check. Preserve the existing unit/hermetic matrix as the faster layer.
 
+## Outcome
 
-## Completion Summary
-
-- Added a Linux hermetic two-node acceptance harness using packaged redeem subprocesses, isolated host/leech roots, shell-inert fake SSH, scripted Niri Unix sockets, controlled Kitty/process trees, and pinned real Zellij 0.43.1.
-- Proved packaged inventory/controller enrolment, singleton, selection, routed lost-success same-token replay, committed journal, automatic handoff/projection, exact PTY attachment, close/drop/reopen/undo/reconnect/close-focused, ID-reuse refusal, cancellation, disablement, rollback, epoch rotation, and sentinel/host-session safety.
-- Proved host-location workspace/mode/width/height convergence, report-only order drift, exact-ID non-focus verify-after-write effects, one injected spatial failure plus bounded recovery, and zero host writeback.
-- Fixed three contract-preserving defects exposed by subprocess testing: Linux process-tree traversal across non-leader threads, projection launch retirement honoring RetryWindow, and bounded exact Zellij catalog visibility after session creation.
-- Hardened harness cleanup with pidfd-first owner/start identity, exact NUL-delimited environment matching, scoped signaling/wait/reap, leak assertions, and hostile PID/owner/zombie/embedded-marker regressions.
-- Added a dedicated Nix sandbox check and testing traceability; repeated local, race, fresh and forced Nix lifecycle runs plus final independent review passed with no blockers.
-
-### Files Changed
-
-- internal/subprocessacceptance/harness_test.go
-- internal/zellijlive/process.go
-- internal/zellijlive/zellijlive_test.go
-- internal/slicecontroller/engine.go
-- internal/slicecontroller/controller_test.go
-- internal/slicerpc/server.go
-- internal/slicerpc/routed_launch_test.go
-- flake.nix
-- docs/testing/host-leech-hermetic-matrix.md
+Build a hermetic two-node subprocess acceptance harness was implemented and validated within the recorded acceptance boundaries.

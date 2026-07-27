@@ -38,23 +38,6 @@
           };
         };
 
-        packages.niri-direct-ipc-spike = pkgs.writeShellApplication {
-          name = "terminal-redeemer-niri-direct-ipc-spike";
-          runtimeInputs = [
-            pkgs.bash
-            pkgs.coreutils
-            pkgs.python3
-          ];
-          text = ''
-            export NIRI_BIN=${pkgs.lib.getExe pkgs.niri}
-            export KITTY_BIN=${pkgs.lib.getExe pkgs.kitty}
-            export PYTHON_BIN=${pkgs.lib.getExe pkgs.python3}
-            export NIRI_PROBE=${./scripts/spikes/niri-direct-ipc-probe.py}
-            export EXPECTED_NIRI_VERSION=25.11
-            exec ${pkgs.bash}/bin/bash ${./scripts/spikes/niri-direct-ipc.sh} "$@"
-          '';
-        };
-
         packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.0.0" { } ''
           mkdir -p "$out/share/terminal-redeemer/host-leech-slices/v1"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.json"
@@ -72,12 +55,6 @@
           meta.description = "redeem CLI";
         };
 
-        apps.niri-direct-ipc-spike = {
-          type = "app";
-          program = pkgs.lib.getExe self.packages.${system}.niri-direct-ipc-spike;
-          meta.description = "Run the nested Niri direct-IPC feasibility spike";
-        };
-
         apps.default = self.apps.${system}.redeem;
 
         devShells.default = pkgs.mkShell {
@@ -87,6 +64,14 @@
             golangci-lint
             gotools
             jq
+          ];
+        };
+
+        devShells.niri-spike = pkgs.mkShell {
+          packages = [
+            pkgs.niri
+            pkgs.kitty
+            pkgs.python3
           ];
         };
 
@@ -325,19 +310,6 @@
           assert builtins.match ".*Mod\\+Return.*slice.*launch.*Mod\\+W.*slice.*close-focused.*" cfg.programs.terminal-redeemer.slice.niriIntegrationFragment != null;
           hmCfg.activationPackage;
 
-        checks.niri-direct-ipc-contract-spike =
-          pkgs.runCommand "terminal-redeemer-niri-direct-ipc-contract-spike" {
-            nativeBuildInputs = [ pkgs.bash pkgs.niri pkgs.python3 ];
-          } ''
-            export NIRI_BIN=${pkgs.lib.getExe pkgs.niri}
-            export PYTHON_BIN=${pkgs.lib.getExe pkgs.python3}
-            export NIRI_PROBE=${./scripts/spikes/niri-direct-ipc-probe.py}
-            export NIRI_FIXTURE_DIR=${./internal/niri/testdata}
-            export EXPECTED_NIRI_VERSION=25.11
-            ${pkgs.bash}/bin/bash ${./scripts/spikes/niri-direct-ipc.sh} --contract
-            touch "$out"
-          '';
-
         checks.zellij-live-only-attachment-spike =
           pkgs.runCommand "terminal-redeemer-zellij-live-only-attachment-spike" {
             nativeBuildInputs = [
@@ -374,18 +346,39 @@
           assert self.packages.${system} ? terminal-redeemer;
           assert self.packages.${system} ? host-leech-consumer-contract;
           pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-check" {
-          nativeBuildInputs = [ pkgs.python3 pkgs.coreutils pkgs.check-jsonschema ];
+          nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.jq pkgs.check-jsonschema ];
         } ''
           cd ${./.}
-          export TERMINAL_REDEEMER_SOURCE_ROOT=${./.}
           contractOut=${self.packages.${system}.host-leech-consumer-contract}/share/terminal-redeemer/host-leech-slices/v1
-          export TERMINAL_REDEEMER_CONTRACT_PACKAGE_ROOT="$contractOut"
-          ${pkgs.python3}/bin/python3 ${./scripts/tests/host-leech-consumer-contract.py}
-          check-jsonschema --schemafile contracts/host-leech-slices/v1/consumer-contract.schema.json contracts/host-leech-slices/v1/consumer-contract.json
-          cmp contracts/host-leech-slices/v1/consumer-contract.json "$contractOut/consumer-contract.json"
+          schema=contracts/host-leech-slices/v1/consumer-contract.schema.json
+          contract=contracts/host-leech-slices/v1/consumer-contract.json
+          check-jsonschema --schemafile "$schema" "$contract"
+          reject_contract_mutation() {
+            name=$1
+            filter=$2
+            mutated="$TMPDIR/consumer-contract-$name.json"
+            jq "$filter" "$contract" > "$mutated"
+            if check-jsonschema --schemafile "$schema" "$mutated" >/dev/null 2>&1; then
+              echo "consumer contract schema accepted semantic drift: $name" >&2
+              exit 1
+            fi
+          }
+          reject_contract_mutation drops '.drops.survives_source_replacement = false'
+          reject_contract_mutation command-argv '.commands.launch_reconnect[3] = "--fallback"'
+          reject_contract_mutation authority '.authority.converged_properties -= ["proportional_height"]'
+          reject_contract_mutation revisions '.revisions.non_authoritative_observations -= ["degraded"]'
+          reject_contract_mutation limitations '.limitations.pinned_version_coupling = false'
+          reject_contract_mutation no-fallback '.rollout.automatic_local_fallback_after_remote_intent = true'
+          cmp "$contract" "$contractOut/consumer-contract.json"
           cmp contracts/host-leech-slices/v1/consumer-contract.schema.json "$contractOut/consumer-contract.schema.json"
           cmp contracts/host-leech-slices/v1/niri-bindings.kdl.in "$contractOut/niri-bindings.kdl.in"
           test -f "$contractOut/niri-bindings.kdl"
+          grep -Fx '    Mod+Return { spawn "@REDEEM@" "slice" "launch"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          grep -Fx '    Mod+W { spawn "@REDEEM@" "slice" "close-focused"; }' contracts/host-leech-slices/v1/niri-bindings.kdl.in
+          if grep -Eq '(^|[[:space:]"/])(sh|bash)([[:space:]"/]|$)|[[:space:]]-c([[:space:]]|$)' contracts/host-leech-slices/v1/niri-bindings.kdl.in; then
+            echo "Niri template must not introduce a shell" >&2
+            exit 1
+          fi
           grep -F '${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}' "$contractOut/niri-bindings.kdl"
           redeem=${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}
           "$redeem" slice --help | grep -F 'controller|mode|launch|projection-run|close-focused'
@@ -406,7 +399,6 @@
             pkgs.coreutils
             pkgs.gnugrep
             pkgs.niri
-            pkgs.python3
             pkgs.util-linux
             pkgs.zellij
           ];
@@ -415,11 +407,9 @@
             runHook preCheck
             export HOME="$TMPDIR/home"
             mkdir -p "$HOME"
-            export RUN_HOST_LEECH_COVERAGE=1
             export TERMINAL_REDEEMER_SOAK_ITERATIONS=2000
-            export RUN_LOCKED_NIRI_CONTRACT_SPIKE=1
+            export RUN_LOCKED_NIRI_VERSION_CHECK=1
             export NIRI_BIN=${pkgs.lib.getExe pkgs.niri}
-            export PYTHON_BIN=${pkgs.lib.getExe pkgs.python3}
             export EXPECTED_NIRI_VERSION=25.11
             export RUN_LOCKED_ZELLIJ_SPIKE=1
             export ZELLIJ_BIN=${pkgs.lib.getExe pkgs.zellij}

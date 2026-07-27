@@ -1,5 +1,5 @@
 ---
-title: Add stateful model tests for controller and inventory invariants
+title: Add stateful model tests for controller invariants
 priority: high
 frontloop_approval_task: 851b810d76915c7af3c15fbbb6fd1a94e102cf7a03e434acca393808a841ad75-3
 ---
@@ -26,18 +26,6 @@ Generate long randomized but reproducible event/action sequences and compare pro
 
 Use Go standard-library random generation/shrinking helpers or a small in-repo model; do not introduce a network service or uncontrolled dependency.
 
+## Outcome
 
-## Completion Summary
-
-- Added deterministic stateful controller models with explicit lifecycle preconditions/outcomes, mandatory non-vacuity witnesses, generated replay values, deadline/restart/successor/cleanup/reconnect/process-loss/undo/handoff coverage, and fixed/custom/extended seed support.
-- Replaced the inventory full-Source expectation with an independent window-to-exact-active-session relation and conflict-multiset oracle plus mandatory shuffle, unrelated-input, duplicate-binding, and evidence-removal metamorphisms.
-- Fixed retry recovery so unsafe sources cannot launch while bounded episodes still expire to disconnected with exact successor gates; added conflicted and deselected expiration regressions.
-- Passed independent review, repeated/custom/extended/race model runs, required model/fuzz discovery, full Go/race/vet/module checks, hermetic matrix, module evaluation, and all offline flake checks.
-
-### Files Changed
-
-- internal/slicecontroller/model_test.go
-- internal/sourceinventory/model_test.go
-- internal/slicecontroller/engine.go
-- internal/slicecontroller/controller_test.go
-- internal/sourceinventory/fuzz_test.go
+The retained stateful controller model was implemented and validated within the recorded acceptance boundaries.

@@ -39,15 +39,6 @@ Add a domain ADR that gives host/workhorse, leech/workstation, share, slice, spa
 
 Depends on no other task. Incorporate the evidence and final decisions from the Niri and Zellij spike tasks as an appendix before the ADR is accepted. Produce a public ADR under docs/adr and minimal navigation updates only.
 
+## Outcome
 
-## Completion Summary
-
-- Added ADR 0002 defining host/leech authority, eligible live sources, share/slice selection, ownership, spatial projection, routed launch, and separate prior-boot/live-projection domains.
-- Separated host-source, leech-desire, attachment-connection, and routed-launch-intent axes, including bounded reconnect exhaustion and explicit closed-by-user reopen semantics.
-- Recorded MVP spatial fidelity, event-stream/full-snapshot boundaries, unsupported Zellij watch behavior, explicit non-goals, and executable spike evidence with limitations.
-- Added minimal README ADR navigation and passed independent subagent review after resolving lifecycle, reopen, and degraded-fidelity findings.
-
-### Files Changed
-
-- docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md
-- README.md
+Codify the host-leech terminal-slice domain and lifecycle was implemented and validated within the recorded acceptance boundaries.

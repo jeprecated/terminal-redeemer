@@ -172,7 +172,7 @@ func TestStoreRejectsDuplicateKeyOrInvalidUTF8Authority(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsOldExperimentalControllerAuthorityWithoutMigration(t *testing.T) {
+func TestStoreRejectsForbiddenControllerAuthorityValuesWithoutMigration(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +180,15 @@ func TestStoreRejectsOldExperimentalControllerAuthorityWithoutMigration(t *testi
 	state, err := store.Initialize(Namespace{Host: "h", Leech: "l"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	baseline := &slicelayout.Spatial{WorkspaceName: "work", WorkspaceKey: "work", Mode: slicelayout.Tiled, WidthPercent: 50, HeightPercent: 50}
+	state.Spatial[sourceA] = SpatialRecord{Baseline: baseline, PendingBaseline: baseline}
+	if err := store.Write(state); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := store.Read()
+	if err != nil || decoded.AuthorityMode != "host_location" || decoded.LeechWriteAuthorized || decoded.Spatial[sourceA].Baseline == nil || decoded.Spatial[sourceA].PendingBaseline == nil {
+		t.Fatalf("current schema-v2 compatibility fields did not round trip: %#v err=%v", decoded, err)
 	}
 	payload, err := json.Marshal(state)
 	if err != nil {
@@ -189,10 +198,11 @@ func TestStoreRejectsOldExperimentalControllerAuthorityWithoutMigration(t *testi
 	if err := json.Unmarshal(payload, &old); err != nil {
 		t.Fatal(err)
 	}
-	old["schema_version"] = float64(1)
-	old["authority_mode"] = string(slicelayout.LeechLocation)
+	if old["authority_mode"] != "host_location" || old["leech_write_authorized"] != false {
+		t.Fatalf("current fixed authority fields changed: %#v", old)
+	}
+	old["authority_mode"] = "leech_location"
 	old["leech_write_authorized"] = true
-	old["closed_by_user"] = map[string]bool{sourceA: true}
 	payload, _ = json.Marshal(old)
 	if err := os.WriteFile(store.current, payload, 0o600); err != nil {
 		t.Fatal(err)
@@ -1262,7 +1272,7 @@ func TestControlStrictSocketSerialization(t *testing.T) {
 func TestSpatialOriginPersistedBeforeEffect(t *testing.T) {
 	now := time.Now().UTC()
 	engine, _ := newEngine(t, &now)
-	result := slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{{Target: slicelayout.Leech, SourceID: sourceA, RuntimeWindowID: 9, TargetCompositorEpoch: "leech", Origin: slicelayout.Origin{ControllerID: "c", Generation: 2, From: slicelayout.Host, Mode: slicelayout.HostLocation}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}}}
+	result := slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{{Target: slicelayout.Leech, SourceID: sourceA, RuntimeWindowID: 9, TargetCompositorEpoch: "leech", Origin: slicelayout.Origin{ControllerID: "c", Generation: 2, From: slicelayout.Host, Mode: "host_location"}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}}}
 	state, effects, err := engine.RecordSpatial(sourceA, result)
 	if err != nil || len(effects) != 1 || state.Spatial[sourceA].LastApplied == nil {
 		t.Fatalf("origin not persisted: %#v %#v %v", state.Spatial, effects, err)
@@ -1423,28 +1433,22 @@ func TestDegradedHostCannotTurnLocalLossIntoManualClose(t *testing.T) {
 	}
 }
 
-func TestV1RejectsLeechAuthorityAndHostTargetSpatialProposal(t *testing.T) {
+func TestV1RejectsHostTargetSpatialProposal(t *testing.T) {
 	now := time.Now().UTC()
 	engine, _ := newEngine(t, &now)
-	if _, err := engine.CommitAuthorityMode(slicelayout.LeechLocation, false); err == nil {
-		t.Fatal("accepted dormant leech authority")
-	}
-	if _, err := engine.CommitAuthorityMode(slicelayout.HostLocation, true); err == nil {
-		t.Fatal("accepted leech write authorization")
-	}
-	proposal := slicelayout.Proposal{Target: slicelayout.Host, SourceID: sourceA, RuntimeWindowID: 42, TargetCompositorEpoch: "epoch", Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Leech, Mode: slicelayout.LeechLocation}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
+	proposal := slicelayout.Proposal{Target: slicelayout.Host, SourceID: sourceA, RuntimeWindowID: 42, TargetCompositorEpoch: "epoch", Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Leech, Mode: "host_location"}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
 	if _, effects, err := engine.RecordSpatial(sourceA, slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{proposal}}); err == nil || len(effects) != 0 {
 		t.Fatalf("host-target proposal accepted: effects=%+v err=%v", effects, err)
 	}
 }
 
-func TestSpatialFailureClearsOriginRetriesBoundedlyAndRollsBack(t *testing.T) {
+func TestSpatialFailureClearsOriginAndRetriesBoundedly(t *testing.T) {
 	now := time.Now().UTC()
 	engine, _ := newEngine(t, &now)
-	proposal := slicelayout.Proposal{Target: slicelayout.Leech, SourceID: sourceA, RuntimeWindowID: 42, TargetCompositorEpoch: "epoch", Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: slicelayout.HostLocation}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
+	proposal := slicelayout.Proposal{Target: slicelayout.Leech, SourceID: sourceA, RuntimeWindowID: 42, TargetCompositorEpoch: "epoch", Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: "host_location"}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
 	_, _, _ = engine.RecordSpatial(sourceA, slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{proposal}})
 	state, err := engine.RecordSpatialFailure(sourceA, "spatial_execution_failed")
-	if err != nil || state.Spatial[sourceA].LastApplied != nil || state.Spatial[sourceA].Recovery == nil || state.Spatial[sourceA].Recovery.Stable || state.AuthorityMode != slicelayout.HostLocation {
+	if err != nil || state.Spatial[sourceA].LastApplied != nil || state.Spatial[sourceA].Recovery == nil || state.Spatial[sourceA].Recovery.Stable || state.AuthorityMode != "host_location" {
 		t.Fatalf("first failure=%#v err=%v", state.Spatial[sourceA], err)
 	}
 	now = state.Spatial[sourceA].Recovery.NextAttemptAt
@@ -1639,7 +1643,7 @@ func TestLeechSpatialReproofRejectsReusedIDWithoutAction(t *testing.T) {
 	_, _, _ = engine.SelectWorkspace("work", true)
 	prepareSuccessfulLaunch(t, engine, sourceA, 22)
 	_, _, _ = engine.ObserveLocal("leech-epoch", []OwnedWindow{{SourceID: sourceA, WindowID: 9, PID: 22}})
-	proposal := slicelayout.Proposal{Target: slicelayout.Leech, TargetCompositorEpoch: "leech-epoch", SourceID: sourceA, RuntimeWindowID: 9, Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: slicelayout.HostLocation}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
+	proposal := slicelayout.Proposal{Target: slicelayout.Leech, TargetCompositorEpoch: "leech-epoch", SourceID: sourceA, RuntimeWindowID: 9, Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: "host_location"}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}}}
 	_, _, _ = engine.RecordSpatial(sourceA, slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{proposal}})
 	client := &fakeLocalNiri{state: niriipc.State{Windows: []niriipc.Window{{ID: 9, PID: 99, AppID: "unrelated"}}}}
 	proc := fakeProc{exe: map[int]string{99: "/store/bin/other"}, argv: map[int][]string{99: {"other"}}}
@@ -1657,7 +1661,7 @@ func TestLeechSpatialReprovesBeforeEveryIndividualAction(t *testing.T) {
 	_, _, _ = engine.ObserveLocal("leech-epoch", []OwnedWindow{{SourceID: sourceA, WindowID: 9, PID: 22}})
 	state, _ := engine.Status()
 	mapping := state.Projections[sourceA]
-	proposal := slicelayout.Proposal{Target: slicelayout.Leech, TargetCompositorEpoch: "leech-epoch", SourceID: sourceA, RuntimeWindowID: 9, Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: slicelayout.HostLocation}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}, {Kind: slicelayout.ChangeHeight, Percent: 50}}}
+	proposal := slicelayout.Proposal{Target: slicelayout.Leech, TargetCompositorEpoch: "leech-epoch", SourceID: sourceA, RuntimeWindowID: 9, Origin: slicelayout.Origin{ControllerID: "controller", Generation: 2, From: slicelayout.Host, Mode: "host_location"}, VerifyAfterWrite: true, Changes: []slicelayout.Change{{Kind: slicelayout.ChangeWidth, Percent: 50}, {Kind: slicelayout.ChangeHeight, Percent: 50}}}
 	_, _, _ = engine.RecordSpatial(sourceA, slicelayout.Result{Status: slicelayout.PlanComplete, Proposals: []slicelayout.Proposal{proposal}})
 	valid := niriipc.State{Windows: []niriipc.Window{{ID: 9, PID: 22, AppID: mapping.AppID}}}
 	reused := niriipc.State{Windows: []niriipc.Window{{ID: 9, PID: 99, AppID: "unrelated"}}}

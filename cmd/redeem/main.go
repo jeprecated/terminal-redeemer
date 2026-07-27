@@ -239,10 +239,6 @@ func runSliceRPC(args []string, resolvedConfig config.Config, stdout io.Writer, 
 		_ = slicerpc.EncodeResponse(stdout, slicerpc.Response{SchemaVersion: slicerpc.SchemaVersion, Outcome: slicerpc.Outcome{Status: slicerpc.StatusInvalid, Code: "invalid_request"}, SupportedSchemaVersions: []uint32{slicerpc.SchemaVersion}})
 		return 2
 	}
-	if request.Verb == slicerpc.VerbSpatialApply {
-		_ = slicerpc.EncodeResponse(stdout, slicerpc.Response{SchemaVersion: slicerpc.SchemaVersion, RequestID: request.RequestID, Outcome: slicerpc.Outcome{Status: slicerpc.StatusUnavailable, Code: "spatial_apply_unsupported_v1"}})
-		return 2
-	}
 	resolver := sliceenv.Resolver{Keys: resolvedConfig.Slice.GraphicalContextKeys, Systemctl: resolvedConfig.Slice.SystemctlCommand}
 	resolveContext := func(ctx context.Context) (map[string]string, error) { return resolver.Resolve(ctx) }
 	store, storeErr := sourceinventory.NewStore(*stateDir)
@@ -325,135 +321,6 @@ func (m *rpcNiriMutator) Action(ctx context.Context, action any) error {
 		return err
 	}
 	return (niriipc.Client{SocketPath: env["NIRI_SOCKET"]}).Action(ctx, action)
-}
-
-func applyHostSpatial(ctx context.Context, snapshot slicerpc.Snapshotter, mutator slicerpc.NiriMutator, payload slicerpc.SpatialApplyPayload, poll time.Duration) error {
-	if snapshot == nil || mutator == nil {
-		return errors.New("spatial authority unavailable")
-	}
-	envelope, err := snapshot(ctx)
-	if err != nil || envelope.Observation.Quality != sliceprotocol.QualityComplete || envelope.Authoritative == nil || envelope.Authoritative.SourceEpoch != payload.SourceEpoch {
-		return errors.New("complete matching source epoch required")
-	}
-	var source *sliceprotocol.Source
-	for i := range envelope.Authoritative.Sources {
-		candidate := &envelope.Authoritative.Sources[i]
-		if candidate.SourceID == payload.SourceID && candidate.RuntimeWindowID == payload.RuntimeWindowID {
-			source = candidate
-			break
-		}
-	}
-	if source == nil {
-		return errors.New("exact eligible source ownership not found")
-	}
-	state, err := mutator.Snapshot(ctx)
-	if err != nil {
-		return err
-	}
-	validWindow := false
-	focusedBefore := uint64(0)
-	workspaces := map[uint64]bool{}
-	for _, workspace := range state.Workspaces {
-		workspaces[workspace.ID] = true
-	}
-	for _, window := range state.Windows {
-		if window.IsFocused {
-			focusedBefore = window.ID
-		}
-		if window.ID == payload.RuntimeWindowID {
-			validWindow = true
-		}
-	}
-	if !validWindow {
-		return errors.New("runtime source window disappeared")
-	}
-	for _, change := range payload.Changes {
-		var action any
-		switch change.Kind {
-		case "workspace":
-			if !workspaces[change.WorkspaceRuntimeID] {
-				return errors.New("workspace target is not current")
-			}
-			action = map[string]any{"MoveWindowToWorkspace": niriipc.MoveWindowToWorkspaceAction{WindowID: payload.RuntimeWindowID, Reference: niriipc.WorkspaceReference{ID: change.WorkspaceRuntimeID}, Focus: false}}
-		case "layout_mode":
-			if change.Mode == "floating" {
-				action = map[string]any{"MoveWindowToFloating": niriipc.WindowIDAction{ID: payload.RuntimeWindowID}}
-			} else {
-				action = map[string]any{"MoveWindowToTiling": niriipc.WindowIDAction{ID: payload.RuntimeWindowID}}
-			}
-		case "width_percent":
-			action = map[string]any{"SetWindowWidth": niriipc.SetWindowSizeAction{ID: payload.RuntimeWindowID, Change: niriipc.SetProportionChange{SetProportion: change.Percent}}}
-		case "height_percent":
-			action = map[string]any{"SetWindowHeight": niriipc.SetWindowSizeAction{ID: payload.RuntimeWindowID, Change: niriipc.SetProportionChange{SetProportion: change.Percent}}}
-		default:
-			return errors.New("unsupported spatial action")
-		}
-		if err := mutator.Action(ctx, action); err != nil {
-			return err
-		}
-	}
-	if poll <= 0 {
-		poll = 100 * time.Millisecond
-	}
-	ticker := time.NewTicker(poll)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			verifiedState, stateErr := mutator.Snapshot(ctx)
-			if stateErr != nil {
-				continue
-			}
-			focusedAfter := uint64(0)
-			targetPresent := false
-			for _, window := range verifiedState.Windows {
-				if window.IsFocused {
-					focusedAfter = window.ID
-				}
-				if window.ID == payload.RuntimeWindowID {
-					targetPresent = true
-				}
-			}
-			if !targetPresent {
-				return errors.New("source disappeared during spatial verification")
-			}
-			if focusedAfter != focusedBefore {
-				return errors.New("unrelated focus changed during spatial mutation")
-			}
-			next, err := snapshot(ctx)
-			if err != nil || next.Observation.Quality != sliceprotocol.QualityComplete || next.Authoritative == nil || next.Authoritative.SourceEpoch != payload.SourceEpoch {
-				continue
-			}
-			var current *sliceprotocol.Source
-			for i := range next.Authoritative.Sources {
-				if next.Authoritative.Sources[i].SourceID == payload.SourceID && next.Authoritative.Sources[i].RuntimeWindowID == payload.RuntimeWindowID {
-					current = &next.Authoritative.Sources[i]
-					break
-				}
-			}
-			if current == nil {
-				return errors.New("source disappeared during spatial verification")
-			}
-			verified := true
-			for _, change := range payload.Changes {
-				switch change.Kind {
-				case "workspace":
-					verified = verified && current.Workspace.RuntimeID == change.WorkspaceRuntimeID
-				case "layout_mode":
-					verified = verified && current.Layout.Mode == change.Mode
-				case "width_percent":
-					verified = verified && math.Abs(float64(current.Layout.WindowWidth)/float64(current.Output.LogicalWidth)*100-change.Percent) <= 0.02
-				case "height_percent":
-					verified = verified && math.Abs(float64(current.Layout.WindowHeight)/float64(current.Output.LogicalHeight)*100-change.Percent) <= 0.02
-				}
-			}
-			if verified {
-				return nil
-			}
-		}
-	}
 }
 
 func runSliceAttach(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -977,7 +844,6 @@ func planControllerSpatial(ctx context.Context, engine *slicecontroller.Engine, 
 			hostCatalog = append(hostCatalog, slicelayout.Workspace{RuntimeID: source.Workspace.RuntimeID, Name: source.Workspace.Name, Key: source.Workspace.Key})
 		}
 	}
-	requestedMode := slicelayout.HostLocation
 	for _, hostSource := range state.Inventory.Sources {
 		ownedWindow, ok := ownedBySource[hostSource.SourceID]
 		if !ok {
@@ -1009,20 +875,16 @@ func planControllerSpatial(ctx context.Context, engine *slicecontroller.Engine, 
 			continue
 		}
 		hostMode := slicelayout.LayoutMode(hostSource.Layout.Mode)
-		input := slicelayout.Input{Mode: requestedMode, PreviousMode: state.AuthorityMode, ControllerID: state.ControllerID, Generation: state.Generation + 1, Host: slicelayout.Observation{Quality: slicelayout.Complete, SourceID: hostSource.SourceID, SourceEpoch: state.Inventory.SourceEpoch, RuntimeWindowID: hostSource.RuntimeWindowID, Output: hostSource.Output, Workspace: slicelayout.Workspace{RuntimeID: hostSource.Workspace.RuntimeID, Name: hostSource.Workspace.Name, Key: hostSource.Workspace.Key}, Mode: hostMode, WindowWidth: hostSource.Layout.WindowWidth, WindowHeight: hostSource.Layout.WindowHeight, Order: hostSource.Layout.Position}, Leech: &slicelayout.Observation{Quality: slicelayout.Complete, SourceID: hostSource.SourceID, SourceEpoch: leechEpoch, RuntimeWindowID: ownedWindow.WindowID, Output: sliceprotocol.Output{Name: output.Name, LogicalX: output.Logical.X, LogicalY: output.Logical.Y, LogicalWidth: output.Logical.Width, LogicalHeight: output.Logical.Height, Scale: output.Logical.Scale, Transform: output.Logical.Transform}, Workspace: slicelayout.Workspace{RuntimeID: localWorkspace.ID, Name: *localWorkspace.Name, Key: key}, Mode: mode, WindowWidth: localWindow.Layout.WindowSize[0], WindowHeight: localWindow.Layout.WindowSize[1], Order: order}, HostWorkspaces: hostCatalog, LeechWorkspaces: leechCatalog, Ownership: slicelayout.Ownership{SourceID: hostSource.SourceID, HostCompositorEpoch: state.Inventory.SourceEpoch, LeechCompositorEpoch: leechEpoch, HostRuntimeWindowID: hostSource.RuntimeWindowID, LeechRuntimeWindowID: ownedWindow.WindowID, ProjectionPositivelyOwned: true}, LeechWriteAuthorized: false}
+		input := slicelayout.Input{ControllerID: state.ControllerID, Generation: state.Generation + 1, Host: slicelayout.Observation{Quality: slicelayout.Complete, SourceID: hostSource.SourceID, SourceEpoch: state.Inventory.SourceEpoch, RuntimeWindowID: hostSource.RuntimeWindowID, Output: hostSource.Output, Workspace: slicelayout.Workspace{RuntimeID: hostSource.Workspace.RuntimeID, Name: hostSource.Workspace.Name, Key: hostSource.Workspace.Key}, Mode: hostMode, WindowWidth: hostSource.Layout.WindowWidth, WindowHeight: hostSource.Layout.WindowHeight, Order: hostSource.Layout.Position}, Leech: &slicelayout.Observation{Quality: slicelayout.Complete, SourceID: hostSource.SourceID, SourceEpoch: leechEpoch, RuntimeWindowID: ownedWindow.WindowID, Output: sliceprotocol.Output{Name: output.Name, LogicalX: output.Logical.X, LogicalY: output.Logical.Y, LogicalWidth: output.Logical.Width, LogicalHeight: output.Logical.Height, Scale: output.Logical.Scale, Transform: output.Logical.Transform}, Workspace: slicelayout.Workspace{RuntimeID: localWorkspace.ID, Name: *localWorkspace.Name, Key: key}, Mode: mode, WindowWidth: localWindow.Layout.WindowSize[0], WindowHeight: localWindow.Layout.WindowSize[1], Order: order}, HostWorkspaces: hostCatalog, LeechWorkspaces: leechCatalog, Ownership: slicelayout.Ownership{SourceID: hostSource.SourceID, HostCompositorEpoch: state.Inventory.SourceEpoch, LeechCompositorEpoch: leechEpoch, HostRuntimeWindowID: hostSource.RuntimeWindowID, LeechRuntimeWindowID: ownedWindow.WindowID, ProjectionPositivelyOwned: true}}
 		record := state.Spatial[hostSource.SourceID]
 		if record.Recovery != nil {
 			if record.Recovery.Stable {
-				if state.AuthorityMode == slicelayout.LeechLocation {
-					state, _ = engine.CommitAuthorityMode(slicelayout.HostLocation, false)
-				}
 				continue
 			}
 			if time.Now().Before(record.Recovery.NextAttemptAt) {
 				continue
 			}
 		}
-		input.Baseline = record.Baseline
 		input.LastApplied = record.LastApplied
 		result := slicelayout.Plan(input)
 		if next, effects, recordErr := engine.RecordSpatial(hostSource.SourceID, result); recordErr == nil {
@@ -1030,16 +892,10 @@ func planControllerSpatial(ctx context.Context, engine *slicecontroller.Engine, 
 			effectErr := execute(ctx, effects)
 			if effectErr != nil {
 				state, _ = engine.RecordSpatialFailure(hostSource.SourceID, "spatial_execution_failed")
-				if state.AuthorityMode == slicelayout.LeechLocation {
-					state, _ = engine.CommitAuthorityMode(slicelayout.HostLocation, false)
-				}
 				continue
 			}
 			if len(effects) == 0 {
 				state, _ = engine.CompleteSpatial(hostSource.SourceID)
-			}
-			if result.ModeSwitchPending && len(result.Proposals) == 0 {
-				state, _ = engine.CommitAuthorityMode(requestedMode, false)
 			}
 		}
 	}

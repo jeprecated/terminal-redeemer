@@ -38,35 +38,6 @@ Add an opt-in bounded leech controller that projects selected host workspaces an
 
 Separate pure desired-state planning from side effects. Ownership, state transition, reconnect, and disappearance gates must be hermetically testable before live service wiring.
 
+## Outcome
 
-## Completion Summary
-
-- Added an opt-in crash-safe singleton slice controller with private control socket/store lock, strict serialized control protocol, disabled-by-default service wiring, and bounded persisted authority.
-- Implemented complete-only revision reconciliation, selected-workspace/pickup/close/reopen/drop/undo semantics, source-gone grace, durable bounded reconnect/exhaustion, explicit reconnect, epoch lineage/successor gates, and cleanup-before-launch barriers.
-- Implemented exactly-one projection mapping before side effects, configured-executable/full-argv/PID/app/Niri ownership proof, crash re-adoption, exact token-correlated live attachment confirmation, and close-only-owned behavior.
-- Implemented healthy-host manual-close classification, hardened post-lock focused-close fallback, monotonic routed-launch handoff, startup re-observation, and explicit unsupported pinned-Zellij watch compatibility.
-- Integrated host/leech spatial planning with fresh per-action ownership proof, origin prevention, bounded failure recovery/rollback, and report-only order drift.
-- Bound all authority/history/argv/state dimensions deterministically with fail-closed exact tombstone capacity, passed full Go/race/vet/Nix/package checks, and obtained final independent correctness and adversarial review passes.
-
-### Files Changed
-
-- internal/slicecontroller/
-- internal/sliceprotocol/accept.go
-- internal/sliceprotocol/protocol_test.go
-- internal/sliceattach/attach.go
-- internal/sliceattach/attach_test.go
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- internal/config/config.go
-- internal/config/slice_test.go
-- internal/niriipc/types.go
-- internal/slicerpc/
-- internal/slicetransport/
-- internal/mirror/windows.go
-- internal/mirror/orchestration_test.go
-- modules/home-manager/terminal-redeemer.nix
-- flake.nix
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- docs/CONFIG.md
-- README.md
+Reconcile selected host workspaces without duplicate windows was implemented and validated within the recorded acceptance boundaries.

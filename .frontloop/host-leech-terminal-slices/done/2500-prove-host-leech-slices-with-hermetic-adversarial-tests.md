@@ -34,26 +34,6 @@ Build a deterministic cross-layer matrix for inventory, identity, selection, exa
 
 Depends on all owning implementation tasks and both spike tasks. Develop focused tests alongside each owner, then close cross-layer gaps here. Block rollout rather than weakening safety assertions if pinned tools contradict the contracts.
 
+## Outcome
 
-## Completion Summary
-
-- Added a traceable cross-layer hermetic acceptance matrix covering inventory, Niri replay, exact attachment, controller lifecycle/ownership, spatial policy, routed launch, and legacy compatibility.
-- Added an offline isolated test runner and Nix sandbox check that execute all cited package tests plus the real flake-locked Zellij 0.43.1 live-only hard-link contract.
-- Added missing cardinality, one-window/two-session ambiguity, transient Niri inconsistency convergence, dynamic selection/drop/removal, and successful persisted-window recovery proofs.
-- Added direct normal close/drop executor tests proving exact owned local CloseWindow behavior and zero remote/session termination under hostile, ambiguous, or unrelated evidence.
-- Documented the separate physical operator smoke gate and strengthened temporary-state/runtime/cache isolation for deterministic no-network execution.
-- Passed full offline Go tests, full race suite, vet, all 17 current flake checks (including the pinned Niri non-live contract and Zellij live-only spikes), repeated focused tests, citation resolution, and independent acceptance review.
-
-### Files Changed
-
-- docs/testing/host-leech-hermetic-matrix.md
-- scripts/tests/host-leech-hermetic-matrix.sh
-- internal/niriipc/client_test.go
-- internal/sourceinventory/sourceinventory_test.go
-- internal/slicecontroller/controller_test.go
-- internal/zellijlive/zellijlive_test.go
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- flake.nix
-- README.md
-- docs/OPERATIONS.md
+Prove host-leech slices with hermetic adversarial tests was implemented and validated within the recorded acceptance boundaries.

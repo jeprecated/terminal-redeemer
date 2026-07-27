@@ -27,24 +27,6 @@ Correct the accepted ADRs, protocol, configuration, operations guidance, and que
 
 Target docs/adr/0002-0004, docs/PROTOCOL.md, docs/CONFIG.md, docs/OPERATIONS.md, and the blocked publication/test task text. Preserve all existing safety invariants not contradicted by the final decisions.
 
+## Outcome
 
-## Completion Summary
-
-- Aligned ADRs 0002-0004, protocol, configuration, operations, readiness, and test traceability with host-location-only v1 semantics.
-- Documented session-keyed drop persistence across epochs/headless sessions, early reopen/undo, and automatic expiry only after accepted complete absence confirmations plus committed grace.
-- Documented verified live-session inventory evidence and non-destructive degraded/replay/conflict handling.
-- Documented explicit owner-only backup and pre-release controller re-enrolment without host-session or unrelated-state deletion.
-- Corrected the blocked publication criteria and remaining adversarial matrix to remove both-mode v1 claims and require host convergence, leech-config rejection, and final drop semantics.
-- Targeted stale-language and contract-trace checks passed.
-
-### Files Changed
-
-- docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md
-- docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md
-- docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md
-- docs/PROTOCOL.md
-- docs/CONFIG.md
-- docs/OPERATIONS.md
-- docs/HOST_LEECH_READINESS.md
-- docs/testing/host-leech-hermetic-matrix.md
-- .frontloop/host-leech-terminal-slices/clarify/publish-slice-readiness-migration-rollback-and-consumer-contract.md
+Amend final v1 authority, drop-persistence, and reset contracts was implemented and validated within the recorded acceptance boundaries.

@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"regexp"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -368,12 +367,4 @@ func NewControlRequest(verb ControlVerb, payload any) ControlRequest {
 	id := fmt.Sprintf("req-%d", time.Now().UnixNano())
 	raw, _ := json.Marshal(payload)
 	return ControlRequest{SchemaVersion: SchemaVersion, RequestID: id, Verb: verb, Payload: raw}
-}
-func ParseControlVerb(value string) (ControlVerb, error) {
-	verb := ControlVerb(strings.TrimSpace(value))
-	switch verb {
-	case VerbStatus, VerbWorkspaceAdd, VerbWorkspaceRemove, VerbPickup, VerbDrop, VerbClose, VerbReopen, VerbUndo, VerbReconnect, VerbLaunchHandoff, VerbAttachmentConnected, VerbAttachmentLost:
-		return verb, nil
-	}
-	return "", errors.New("unsupported control verb")
 }

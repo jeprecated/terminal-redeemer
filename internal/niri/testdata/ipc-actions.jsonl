@@ -1,7 +1,0 @@
-{"request":{"Action":{"SetWorkspaceName":{"name":"tr-spike","workspace":{"Id":2}}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"SetWorkspaceName":{"name":"TR-SPIKE","workspace":{"Id":3}}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"MoveWindowToWorkspace":{"window_id":42,"reference":{"Id":2},"focus":false}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"MoveWindowToTiling":{"id":42}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"MoveWindowToFloating":{"id":42}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"SetWindowWidth":{"id":42,"change":{"SetProportion":45.0}}}},"reply":{"Ok":"Handled"}}
-{"request":{"Action":{"SetWindowHeight":{"id":42,"change":{"SetProportion":40.0}}}},"reply":{"Ok":"Handled"}}

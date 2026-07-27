@@ -623,7 +623,6 @@ type Server struct {
 	SourceFingerprint     string
 	ProveCommit           func(context.Context, TokenRecord) (string, string, error)
 	CheckNiri             func(context.Context) error
-	SpatialApply          func(context.Context, SpatialApplyPayload) error
 	Now                   func() time.Time
 	PollInterval          time.Duration
 	// AfterDurableStage is an internal process-harness boundary. Production
@@ -638,7 +637,7 @@ func (s Server) Handle(ctx context.Context, request Request) Response {
 		response.Outcome = Outcome{Status: status, Code: code}
 		return response
 	}
-	if s.CheckNiri != nil && (request.Verb == VerbLiveness || request.Verb == VerbSnapshot || request.Verb == VerbWorkspaceEnsure || request.Verb == VerbSpatialApply) {
+	if s.CheckNiri != nil && (request.Verb == VerbLiveness || request.Verb == VerbSnapshot || request.Verb == VerbWorkspaceEnsure) {
 		if err := s.CheckNiri(ctx); err != nil {
 			return fail(StatusUnavailable, "niri_version_unavailable")
 		}
@@ -681,17 +680,6 @@ func (s Server) Handle(ctx context.Context, request Request) Response {
 		}
 		response.Outcome = Outcome{Status: StatusOK}
 		response.Result = map[string]any{"workspace_id": id}
-		return response
-	case VerbSpatialApply:
-		var payload SpatialApplyPayload
-		if err := DecodePayload(request.Payload, &payload); err != nil || validateSpatialApply(payload) != nil {
-			return fail(StatusInvalid, "invalid_spatial_apply")
-		}
-		if s.SpatialApply == nil || s.SpatialApply(ctx, payload) != nil {
-			return fail(StatusUnavailable, "spatial_apply_failed")
-		}
-		response.Outcome = Outcome{Status: StatusOK}
-		response.Result = map[string]any{"applied": true}
 		return response
 	case VerbLaunch:
 		var payload LaunchPayload
@@ -1032,36 +1020,6 @@ func validateSessionName(name string) error {
 	return nil
 }
 
-func validateSpatialApply(payload SpatialApplyPayload) error {
-	if !safeID.MatchString(payload.SourceID) || !safeID.MatchString(payload.SourceEpoch) || payload.RuntimeWindowID == 0 || len(payload.Changes) == 0 || len(payload.Changes) > 4 {
-		return errors.New("invalid spatial identity or change count")
-	}
-	seen := map[string]bool{}
-	for _, change := range payload.Changes {
-		if seen[change.Kind] {
-			return errors.New("duplicate spatial property")
-		}
-		seen[change.Kind] = true
-		switch change.Kind {
-		case "workspace":
-			if change.WorkspaceRuntimeID == 0 {
-				return errors.New("workspace runtime id required")
-			}
-		case "layout_mode":
-			if change.Mode != "tiled" && change.Mode != "floating" {
-				return errors.New("invalid layout mode")
-			}
-		case "width_percent", "height_percent":
-			if change.Percent < 1 || change.Percent > 100 {
-				return errors.New("invalid proportion")
-			}
-		default:
-			return errors.New("unsupported spatial change")
-		}
-	}
-	return nil
-}
-
 func validateWorkspaceName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 255 || strings.ContainsAny(name, "\x00\r\n") {
@@ -1222,12 +1180,4 @@ func inspectWorkspaceCatalog(state niriipc.State, requestedName, requestedKey st
 		catalog.requested = &copy
 	}
 	return catalog, nil
-}
-
-func ServeOne(ctx context.Context, server Server, input interface{ Read([]byte) (int, error) }, output interface{ Write([]byte) (int, error) }) error {
-	request, err := DecodeRequest(input)
-	if err != nil {
-		return EncodeResponse(output, Response{SchemaVersion: SchemaVersion, Outcome: Outcome{Status: StatusInvalid, Code: "invalid_request"}, SupportedSchemaVersions: []uint32{SchemaVersion}})
-	}
-	return EncodeResponse(output, server.Handle(ctx, request))
 }

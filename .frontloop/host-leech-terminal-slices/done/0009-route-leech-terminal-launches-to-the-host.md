@@ -38,36 +38,6 @@ Make Leech mode feel local by making a selected-workspace terminal key create ex
 
 Define the host transaction journal and controller handoff before implementing effects. Consumer keybinding and rollout remain a later mono-nix task after an immutable reviewed release.
 
+## Outcome
 
-## Completion Summary
-
-- Added disabled-by-default inspectable Leech mode and packaged `redeem slice launch` contract while preserving unchanged local Kitty behavior when mode is off or the current workspace is unselected.
-- Implemented durable pre-remote launch intents with one random token, deterministic path-bounded session, serialized same-token replay, bounded reconnect/exhaustion, and no local fallback after intent creation.
-- Extended host RPC with an enrolled crash-safe staged journal that creates or replays exactly one isolated Zellij session and Kitty window, correlates PID/Niri/workspace, and commits only after fresh epoch/fingerprint/inventory/process reproof.
-- Implemented strict routed response/source tuple validation, runtime-window controller handoff, complete-authority matching, terminal non-creation resolution, and same-token explicit reconnect.
-- Hardened missing-after-use host authority, fresh-session collision handling, effective socket path limits, transaction-identity gates before every resumed side effect, direct argv/clean environment, and exact live-only attachment boundaries.
-- Passed full Go/race/vet/Nix/module/package checks and final independent correctness/adversarial reviews after resolving all identity, replay, journal, and crash-window findings.
-
-### Files Changed
-
-- internal/slicelaunch/
-- internal/slicerpc/protocol.go
-- internal/slicerpc/token_store.go
-- internal/slicerpc/server.go
-- internal/slicerpc/routed_launch_test.go
-- internal/slicetransport/client.go
-- internal/slicetransport/client_test.go
-- internal/slicecontroller/types.go
-- internal/slicecontroller/engine.go
-- internal/slicecontroller/control.go
-- internal/slicecontroller/controller_test.go
-- internal/config/config.go
-- internal/config/slice_test.go
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- modules/home-manager/terminal-redeemer.nix
-- flake.nix
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- docs/CONFIG.md
-- README.md
+Route leech terminal launches to the host was implemented and validated within the recorded acceptance boundaries.

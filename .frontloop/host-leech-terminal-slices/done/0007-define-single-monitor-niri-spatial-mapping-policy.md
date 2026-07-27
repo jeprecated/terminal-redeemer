@@ -35,24 +35,6 @@ Codify deterministic, non-disruptive MVP spatial projection for one host monitor
 
 Depends on the domain ADR and passing Niri spike. Separate pure layout mapping from Niri mutations and attach authority/origin metadata to every proposed write so feedback loops are testable.
 
+## Outcome
 
-## Completion Summary
-
-- Added ADR 0004 defining deterministic single-active-output host/leech spatial projection, static workspace identity, exact runtime-ID mutation boundaries, and non-disruptive failure semantics.
-- Implemented a pure typed spatial planner for host-location and authorized leech-location modes with epoch-bound ownership, origin-loop suppression, per-property conflict handling, deterministic switching/rollback, and verification-gated proposals.
-- Implemented proportional logical sizing with explicit approximation metadata, tiled/floating projection, stable initial `(column,tile)` ordering, and report-only later order drift.
-- Hardened exact trailing-workspace ensure against duplicate/canonical collisions, topology changes, runtime-ID reuse, and silent Niri no-ops.
-- Added equal/differing-resolution fixtures, adversarial policy/RPC tests, exact direct-Niri action payload tests, and live operator smoke criteria.
-- Passed full Go, race, vet, Nix checks and independent review after resolving origin, epoch ownership, workspace verification, scale fidelity, and fixture-quality findings.
-
-### Files Changed
-
-- docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md
-- internal/slicelayout/
-- internal/niriipc/client.go
-- internal/niriipc/client_test.go
-- internal/slicerpc/server.go
-- internal/slicerpc/slicerpc_test.go
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- README.md
+Define single-monitor Niri spatial mapping policy was implemented and validated within the recorded acceptance boundaries.

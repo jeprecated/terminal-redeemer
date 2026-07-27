@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,21 +36,17 @@ const (
 )
 
 type summary struct {
-	SchemaVersion int               `json:"schema_version"`
-	Seed          uint64            `json:"seed"`
-	Iterations    int               `json:"iterations"`
-	Observations  map[string]int    `json:"observations"`
-	Churn         map[string]int    `json:"churn"`
-	Effects       map[string]int    `json:"effects"`
-	Caps          map[string]metric `json:"caps"`
-	Resources     map[string]int    `json:"resources"`
-	Restarts      int               `json:"restarts"`
-	Secrets       bool              `json:"secrets_included"`
+	Observations map[string]int
+	Churn        map[string]int
+	Effects      map[string]int
+	Caps         map[string]metric
+	Resources    map[string]int
+	Restarts     int
 }
 
 type metric struct {
-	Observed int `json:"observed"`
-	Limit    int `json:"limit"`
+	Observed int
+	Limit    int
 }
 
 type soak struct {
@@ -180,7 +175,7 @@ func TestBoundedHostLeechSoak(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newSoak(t, root, iterations)
+	s := newSoak(t, root)
 	baselineGoroutines := runtime.NumGoroutine()
 	baselineFDs := countFDs(t)
 	baselineChildren := countChildren(t)
@@ -396,10 +391,12 @@ func TestBoundedHostLeechSoak(t *testing.T) {
 			t.Fatalf("routed retry/replay cardinality %s=%d, want 1", name, s.summary.Effects[name])
 		}
 	}
-	writeSummary(t, s.summary)
+	if got := s.summary.Effects["routed_transport_attempts"]; got != 2 {
+		t.Fatalf("routed retry/replay transport attempts=%d, want 2", got)
+	}
 }
 
-func newSoak(t *testing.T, root string, iterations int) *soak {
+func newSoak(t *testing.T, root string) *soak {
 	t.Helper()
 	now := time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC)
 	controllerRoot := filepath.Join(root, "controller")
@@ -455,14 +452,10 @@ func newSoak(t *testing.T, root string, iterations int) *soak {
 		nextWindow:  50000,
 		maxima:      map[string]int{},
 		summary: summary{
-			SchemaVersion: 1,
-			Seed:          0x5eedc0de,
-			Iterations:    iterations,
-			Observations:  map[string]int{},
-			Churn:         map[string]int{},
-			Effects:       map[string]int{},
-			Resources:     map[string]int{},
-			Secrets:       false,
+			Observations: map[string]int{},
+			Churn:        map[string]int{},
+			Effects:      map[string]int{},
+			Resources:    map[string]int{},
 		},
 	}
 	s.engine = s.newEngine()
@@ -1104,38 +1097,6 @@ func countTokenRecords(t *testing.T, root string) int {
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
-func writeSummary(t *testing.T, value summary) {
-	t.Helper()
-	payload, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytesContainSecretShape(payload) {
-		t.Fatal("soak summary contains forbidden identity/path material")
-	}
-	path := os.Getenv("TERMINAL_REDEEMER_SOAK_SUMMARY")
-	if path == "" {
-		t.Log(string(payload))
-		return
-	}
-	if !filepath.IsAbs(path) {
-		t.Fatal("soak summary path must be absolute")
-	}
-	if err := os.WriteFile(path, append(payload, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func bytesContainSecretShape(payload []byte) bool {
-	text := string(payload)
-	for _, forbidden := range []string{"/tmp/", "NIRI_SOCKET", "SSH_AUTH_SOCK", "ZELLIJ_SOCKET_DIR", "session_name", "source_id"} {
-		if strings.Contains(text, forbidden) {
 			return true
 		}
 	}

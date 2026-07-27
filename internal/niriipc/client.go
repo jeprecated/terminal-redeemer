@@ -40,7 +40,9 @@ func VerifyVersion(ctx context.Context, command, expected string) error {
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	err := cmd.Run()
-	if err != nil || strings.TrimSpace(output.String()) != "niri 25.11" {
+	version := strings.TrimSpace(output.String())
+	prefix := "niri " + expected
+	if err != nil || (version != prefix && !strings.HasPrefix(version, prefix+" ")) {
 		return errors.New("pinned Niri 25.11 is unavailable")
 	}
 	return nil

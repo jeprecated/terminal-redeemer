@@ -27,22 +27,6 @@ Systematically interrupt and restart the real subprocess harness at every durabl
 
 Build on the subprocess harness rather than duplicating in-process routed tests. Provide per-stage failure diagnostics and retained temp-state opt-in for local debugging.
 
+## Outcome
 
-## Completion Summary
-
-- Added a deterministic real-subprocess crash/restart matrix covering all nine routed-launch durable stages with same-state, same-token recovery.
-- Gated faults only after fsynced token journal evidence, killed pidfd-pinned responsible processes, and asserted at-most-one session, Kitty, placement, source, handoff, and projection.
-- Covered definite pre-start, ambiguous post-start, response loss, cancellation, delayed child/inventory, and marker-checked cleanup outcomes without fallback, prefix reuse, host deletion, or sentinel mutation.
-- Hardened routed transaction flock inheritance with `O_CLOEXEC` and added a regression proving descendants cannot deadlock replay.
-- Added bounded diagnostics, opt-in retained fixtures, Nix sandbox execution, and acceptance-matrix traceability.
-- Passed repeated local, race, forced Nix subprocess, full Go/race/vet/module, hermetic matrix, offline flake, and independent acceptance review.
-
-### Files Changed
-
-- internal/subprocessacceptance/crash_matrix_test.go
-- internal/subprocessacceptance/harness_test.go
-- internal/slicerpc/server.go
-- internal/slicerpc/token_store.go
-- internal/slicerpc/routed_launch_test.go
-- flake.nix
-- docs/testing/host-leech-hermetic-matrix.md
+Prove every routed-launch crash boundary with process restart was implemented and validated within the recorded acceptance boundaries.

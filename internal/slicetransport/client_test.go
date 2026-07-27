@@ -242,13 +242,13 @@ func TestWireDisconnectedIsReadOnlyAndMutationsSynthesizePending(t *testing.T) {
 			t.Fatalf("read verb %s response=%#v err=%v", verb, response, err)
 		}
 	}
-	for _, verb := range []slicerpc.Verb{slicerpc.VerbLaunch, slicerpc.VerbWorkspaceEnsure, slicerpc.VerbSpatialApply, slicerpc.Verb("future_unknown")} {
+	for _, verb := range []slicerpc.Verb{slicerpc.VerbLaunch, slicerpc.VerbWorkspaceEnsure, slicerpc.Verb("future_unknown")} {
 		request := rpcRequest(verb)
 		if _, err := decodeResponse(wire(request.RequestID), request); err == nil {
 			t.Fatalf("accepted disconnected wire outcome for %s", verb)
 		}
 	}
-	for _, verb := range []slicerpc.Verb{slicerpc.VerbLaunch, slicerpc.VerbWorkspaceEnsure, slicerpc.VerbSpatialApply} {
+	for _, verb := range []slicerpc.Verb{slicerpc.VerbLaunch, slicerpc.VerbWorkspaceEnsure} {
 		client := baseClient()
 		request := rpcRequest(verb)
 		client.Run = func(context.Context, string, []string, []byte) ([]byte, error) { return wire(request.RequestID), nil }
@@ -257,19 +257,6 @@ func TestWireDisconnectedIsReadOnlyAndMutationsSynthesizePending(t *testing.T) {
 		if !errors.As(err, &ambiguous) || ambiguous.Status != slicerpc.StatusPending {
 			t.Fatalf("mutation %s err=%v", verb, err)
 		}
-	}
-}
-
-func TestSpatialApplyResponseTyping(t *testing.T) {
-	request := rpcRequest(slicerpc.VerbSpatialApply)
-	request.Payload, _ = json.Marshal(slicerpc.SpatialApplyPayload{SourceID: "src_test", SourceEpoch: "epoch", RuntimeWindowID: 1, Changes: []slicerpc.SpatialChange{{Kind: "width_percent", Percent: 50}}})
-	good, _ := json.Marshal(slicerpc.Response{SchemaVersion: 1, RequestID: "req-1", Outcome: slicerpc.Outcome{Status: slicerpc.StatusOK}, Result: map[string]any{"applied": true}})
-	if _, err := decodeResponse(good, request); err != nil {
-		t.Fatal(err)
-	}
-	bad, _ := json.Marshal(slicerpc.Response{SchemaVersion: 1, RequestID: "req-1", Outcome: slicerpc.Outcome{Status: slicerpc.StatusOK}, Result: map[string]any{"applied": false}})
-	if _, err := decodeResponse(bad, request); err == nil {
-		t.Fatal("accepted unverified spatial result")
 	}
 }
 

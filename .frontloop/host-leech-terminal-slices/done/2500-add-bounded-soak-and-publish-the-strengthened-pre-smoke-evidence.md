@@ -28,26 +28,6 @@ Run sustained virtual-time and subprocess churn to detect growth, leak, retry, a
 
 Execute after the preceding test layers exist. Update docs/testing/host-leech-hermetic-matrix.md and HOST_LEECH_READINESS.md with exact commands and residual gaps.
 
+## Outcome
 
-
-## Completion Summary
-
-- Added deterministic 2,000–50,000 event soak coverage across observation churn, lifecycle/drop/reconnect/restart paths, real routed Router/Server/token/intent/controller reconstruction, exact attachment namespaces, helpers, and bounded resource/state caps.
-- Proved same-token response-loss replay preserves absolute deadline and consumed attempts across reconstruction, yields exactly one host session/Kitty/placement/source/projection effect and two transport attempts, and cannot issue post-deadline calls or local fallback.
-- Added strict secret-free soak summaries, explicit PendingCleanups/authority/resource/effect caps, documented 10,000-event evidence, and exact risk-family/named-function coverage baselines with stale-drift rejection.
-- Integrated actual generated model/fuzz smoke, soak, coverage, pinned Niri/Zellij, packaged subprocess/crash, module, consumer-contract, and offline checks into the hermetic/Nix evidence layer while retaining candidate_not_activated.
-- Passed independent final review after correcting stale coverage, routed retry/cardinality evidence, and absolute deadline enforcement; physical two-machine smoke and immutable pin approval remain separate gates.
-
-### Files Changed
-
-- internal/hostleechsoak/soak_test.go
-- internal/slicelaunch/launch.go
-- internal/slicelaunch/launch_test.go
-- scripts/tests/host-leech-soak.sh
-- scripts/tests/host-leech-coverage.py
-- scripts/tests/host-leech-layer-smoke.sh
-- scripts/tests/host-leech-hermetic-matrix.sh
-- docs/testing/host-leech-coverage-baseline.json
-- docs/testing/host-leech-hermetic-matrix.md
-- docs/HOST_LEECH_READINESS.md
-- flake.nix
+Add bounded soak and publish the strengthened pre-smoke evidence was implemented and validated within the recorded acceptance boundaries.

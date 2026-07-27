@@ -18,7 +18,7 @@ At proposal time it intentionally left workspace normalization, per-source overr
 
 Manual close/drop authority is keyed by the exact verified Zellij SessionID, not the epoch-scoped source ID. It survives ordinary source replacement, headless windows, and source epochs. Explicit reopen or applicable undo clears it early; otherwise only consecutive accepted complete `live_session_ids` absence plus the committed grace deadline expires it automatically. Presence resets evidence, and degraded/duplicate/stale/conflicting/replayed observations never advance it. This final amendment supersedes older exact-source close and no-override-inheritance wording below while leaving exact-source pickups and bounded connection lineage unchanged. Controller state schema 2 fails closed on the old experimental representation; operators back up the entire controller authority directory and explicitly re-enrol rather than migrate in place.
 
-The host-location-only v1 workspace reconciliation, persistence, controller, and routed launch described by this amended ADR remain disabled by default. Leech-location authority and host writeback remain future dormant v1.1 specification. The implementation preserves the executable constraints from the [live-only Zellij attachment spike](../spikes/0001-zellij-live-only-attachment.md) and the [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md).
+The host-authoritative workspace reconciliation, persistence, controller, and routed launch described by this amended ADR remain disabled by default. Host spatial writeback is outside the controller model. The implementation preserves the executable constraints from the [live-only Zellij attachment spike](../spikes/0001-zellij-live-only-attachment.md) and the [Niri direct-IPC spike](../spikes/0002-niri-direct-ipc.md).
 
 ## Decision drivers
 
@@ -320,4 +320,4 @@ Acceptance review confirms that:
 - current state is one logical atomic commit and is independent of bounded audit retention;
 - accepted snapshot ordering, active overrides, successor gates, stable disconnected outcomes, and unresolved routed tokens cannot be history-pruned;
 - all records are host/leech namespaced while MVP admits only one configured pair; and
-- no text makes protocol fields, source digest, timing values, serialization, or CLI names part of this ADR, and the host-location v1 controller/routed launch remain disabled by default while leech-location remains future.
+- no text makes protocol fields, source digest, timing values, serialization, or CLI names part of this ADR, and the host-authoritative controller/routed launch remain disabled by default.

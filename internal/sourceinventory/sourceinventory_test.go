@@ -63,14 +63,20 @@ func TestInventoryCardinalityMatrix(t *testing.T) {
 	base := completeNiriState()
 
 	tests := []struct {
-		name      string
-		windows   []niriipc.Window
-		processes map[int]zellijlive.ProcessEvidence
-		catalog   zellijlive.Catalog
-		want      int
+		name         string
+		windows      []niriipc.Window
+		processes    map[int]zellijlive.ProcessEvidence
+		catalog      zellijlive.Catalog
+		processErr   error
+		want         int
+		wantConflict sliceprotocol.ConflictCode
+		wantErr      sliceprotocol.ReasonCode
 	}{
 		{name: "zero", windows: nil, processes: map[int]zellijlive.ProcessEvidence{}, catalog: zellijlive.Catalog{Sessions: map[string]zellijlive.Session{}}, want: 0},
 		{name: "one", windows: base.Windows, processes: map[int]zellijlive.ProcessEvidence{100: {KittyVerified: true, Candidates: []string{"project"}}}, catalog: activeCatalog(), want: 1},
+		{name: "dead session", windows: base.Windows, processes: map[int]zellijlive.ProcessEvidence{100: {KittyVerified: true, Candidates: []string{"project"}}}, catalog: zellijlive.Catalog{Sessions: map[string]zellijlive.Session{"project": {Name: "project", ID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Status: zellijlive.StatusDeadResurrectable}}}, wantConflict: sliceprotocol.ConflictSessionDeadResurrectable},
+		{name: "prefix-only session", windows: base.Windows, processes: map[int]zellijlive.ProcessEvidence{100: {KittyVerified: true, Candidates: []string{"project"}}}, catalog: zellijlive.Catalog{Sessions: map[string]zellijlive.Session{"project": {Name: "project", ID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Status: zellijlive.StatusPrefixOnly}}}, wantConflict: sliceprotocol.ConflictSessionPrefixOnly},
+		{name: "process evidence loss", windows: base.Windows, processes: map[int]zellijlive.ProcessEvidence{}, catalog: activeCatalog(), processErr: errors.New("unavailable"), wantErr: sliceprotocol.ReasonProcessObservationIncomplete},
 		{name: "many", windows: []niriipc.Window{
 			base.Windows[0],
 			{ID: 43, AppID: "kitty", PID: 101, WorkspaceID: base.Windows[0].WorkspaceID, Layout: niriipc.Layout{Position: []int{2, 1}, TileSize: []float64{800, 600}, WindowSize: []int{800, 600}}},
@@ -90,10 +96,22 @@ func TestInventoryCardinalityMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			state := base
 			state.Windows = tc.windows
-			builder := Builder{Processes: fakeProcesses{values: tc.processes}}
+			builder := Builder{Processes: fakeProcesses{values: tc.processes, err: tc.processErr}}
 			sources, conflicts, err := builder.Build(context.Background(), epoch, state, tc.catalog)
-			if err != nil || len(conflicts) != 0 || len(sources) != tc.want {
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), string(tc.wantErr)) {
+					t.Fatalf("error=%v, want reason %s", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || len(sources) != tc.want {
 				t.Fatalf("sources=%d conflicts=%+v err=%v", len(sources), conflicts, err)
+			}
+			if tc.wantConflict == "" && len(conflicts) != 0 {
+				t.Fatalf("unexpected conflicts=%+v", conflicts)
+			}
+			if tc.wantConflict != "" && (len(conflicts) != 1 || conflicts[0].Code != tc.wantConflict) {
+				t.Fatalf("conflicts=%+v, want one %s", conflicts, tc.wantConflict)
 			}
 			seen := map[string]bool{}
 			for _, source := range sources {

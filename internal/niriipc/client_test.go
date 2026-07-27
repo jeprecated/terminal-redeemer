@@ -274,6 +274,20 @@ func TestSpatialActionTypesMarshalExactPinnedShapes(t *testing.T) {
 	}
 }
 
+func TestLockedNiriBinaryMatchesProductionVersionGate(t *testing.T) {
+	if os.Getenv("RUN_LOCKED_NIRI_VERSION_CHECK") != "1" {
+		t.Skip("locked Niri binary check not requested")
+	}
+	binary := os.Getenv("NIRI_BIN")
+	expected := os.Getenv("EXPECTED_NIRI_VERSION")
+	if binary == "" || expected == "" {
+		t.Fatal("locked Niri check requires NIRI_BIN and EXPECTED_NIRI_VERSION")
+	}
+	if err := VerifyVersion(context.Background(), binary, expected); err != nil {
+		t.Fatalf("locked Niri binary failed production version gate: %v", err)
+	}
+}
+
 func TestVerifyVersionRequiresExactPinnedOutput(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, output string) string {
@@ -283,10 +297,12 @@ func TestVerifyVersionRequiresExactPinnedOutput(t *testing.T) {
 		}
 		return path
 	}
-	if err := VerifyVersion(context.Background(), write("good", "niri 25.11"), "25.11"); err != nil {
-		t.Fatal(err)
+	for _, output := range []string{"niri 25.11", "niri 25.11 (Nixpkgs)"} {
+		if err := VerifyVersion(context.Background(), write("good-"+strings.ReplaceAll(output, " ", "-"), output), "25.11"); err != nil {
+			t.Fatalf("rejected production-compatible output %q: %v", output, err)
+		}
 	}
-	for _, output := range []string{"niri 25.11.1", "niri 25.1", "evil niri 25.11"} {
+	for _, output := range []string{"niri 25.11.1", "niri 25.1", "niri 25.11evil", "evil niri 25.11", "prefixed-niri 25.11"} {
 		if err := VerifyVersion(context.Background(), write(strings.ReplaceAll(output, " ", "-"), output), "25.11"); err == nil {
 			t.Fatalf("accepted %q", output)
 		}

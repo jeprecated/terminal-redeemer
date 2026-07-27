@@ -29,32 +29,6 @@ Publish the final host-location-only v1 contract after all corrective implementa
 
 Replace rather than follow the blocked stale publication assumptions. Execute only after the prior three corrective tasks complete.
 
+## Outcome
 
-## Completion Summary
-
-- Published the corrected host-location-only v1 candidate contract with controller schema 2 and immutable content reference sha256:28ace3a2f6bd5d869e61802dff2300a8808df0817f21af2bebcaed3fd7d78a69.
-- Regenerated and strictly validated contract schemas, release metadata, flake library/package exports, generated Niri bindings, and package artifact membership.
-- Completed operator readiness, migration/re-enrolment, rollback, smoke, security, exact-attachment, residual-limitation, and legacy-coexistence documentation without activation.
-- Kept repository commit/release null, immutable source pin unpublished, candidate inactive, clipboard off, and consumer approval separate.
-- Aligned ADR/protocol implementation status and the 107-byte pathname contract; removed the obsolete blocked publication task.
-- Full Go/race/vet/module verification, hermetic matrix, locked Niri/Zellij spikes, package/module/consumer builds, offline flake checks, links/citations, and final independent publication review passed with no blockers.
-
-### Files Changed
-
-- contracts/host-leech-slices/v1/consumer-contract.json
-- contracts/host-leech-slices/v1/consumer-contract.schema.json
-- contracts/host-leech-slices/v1/release-metadata.json
-- contracts/host-leech-slices/v1/release-metadata.schema.json
-- contracts/host-leech-slices/v1/niri-bindings.kdl.in
-- scripts/tests/host-leech-consumer-contract.py
-- internal/consumercontract/contract_test.go
-- flake.nix
-- README.md
-- docs/CONFIG.md
-- docs/HOST_LEECH_READINESS.md
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md
-- docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md
-- docs/spikes/0001-zellij-live-only-attachment.md
-- scripts/spikes/zellij-live-only-attachment.sh
+Publish corrected v1 readiness, rollback, and consumer contract was implemented and validated within the recorded acceptance boundaries.

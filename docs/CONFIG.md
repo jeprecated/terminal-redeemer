@@ -78,8 +78,8 @@ slice:
     retryWindow: 30s            # original absolute budget survives restart
     sourceGoneGrace: 5s
     sourceGoneConfirmations: 2  # accepted higher complete revisions only
-    authorityMode: host_location # fixed v1 value; other values are rejected
-    leechWriteAuthorized: false  # fixed v1 value; true is rejected
+    authorityMode: host_location # fixed compatibility value; other values are rejected
+    leechWriteAuthorized: false  # fixed compatibility value; true is rejected
 
 mirror:
   sourceHost: ""
@@ -128,7 +128,7 @@ The Nix module supplies store paths for every slice executable; validated YAML/C
 
 `slice.leechModeEnabled` and the Home Manager `slice.leechMode.enable` option both default to false. The first `redeem slice mode status` initializes owner-only runtime mode from that configured default; later `mode enable|disable` changes the durable runtime choice explicitly. The read-only Home Manager `slice.launchCommand` is exact argv `[ <packaged redeem> "slice" "launch" ]` for a future consumer binding, but this module never edits Niri or mono-nix bindings. Mode-off and unselected-workspace routing uses `slice.kittyCommand` with empty argv before any remote intent. Selected-workspace routing never falls back locally after token persistence.
 
-`slice.controller.enabled` defaults to false. Enabling it installs a foreground graphical-session user service, but controller authority must first be enrolled explicitly with `redeem slice controller init`. Its Unix control socket and atomic current state live in an owner-only controller directory. The finite retry deadline, stable disconnected results, source-gone evidence, session-keyed manual drops, successor gates, projection mappings, undo boundary, and routed-launch handoffs are current authority rather than prunable history. V1 supports only `authorityMode: host_location` with `leechWriteAuthorized: false`; validation rejects the dormant experimental values even when the controller is disabled, and Home Manager does not expose those settings.
+`slice.controller.enabled` defaults to false. Enabling it installs a foreground graphical-session user service, but controller authority must first be enrolled explicitly with `redeem slice controller init`. Its Unix control socket and atomic current state live in an owner-only controller directory. The finite retry deadline, stable disconnected results, source-gone evidence, session-keyed manual drops, successor gates, projection mappings, undo boundary, and routed-launch handoffs are current authority rather than prunable history. Host location is authoritative; local supported spatial drift is reverted. The raw compatibility fields remain fixed at `authorityMode: host_location` and `leechWriteAuthorized: false`; validation rejects all other values, and Home Manager does not expose them as settings.
 
 `slice.graphicalContextKeys` must be exactly the three-key set shown above (order is irrelevant), and every key must resolve. Subsets, extras, duplicates, control characters, oversized values, relative Niri socket paths, and unavailable context fail closed. An explicit `slice.attachPrivateRoot` must be absent so Terminal Redeemer can create and durably mark it, or already be a direct current-user mode-0700 directory with the valid root marker; arbitrary existing directories and symlinks are rejected and never garbage-collected. `slice.clipboard.enabled` must remain `false`; this does not change `mirror.clipboard.enabled`.
 

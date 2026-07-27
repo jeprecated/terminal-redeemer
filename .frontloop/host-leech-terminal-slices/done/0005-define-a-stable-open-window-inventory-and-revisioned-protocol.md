@@ -36,28 +36,6 @@ Evolve source inventory into an additive stable protocol that reconciles eligibl
 
 Depends on the domain ADR, workspace-sharing semantics, and both executable spike tasks. Work in a direct Niri socket adapter, mirror/slice schema code, crash-safe epoch/revision state, fixtures, CLI JSON contracts, and public protocol docs.
 
+## Outcome
 
-## Completion Summary
-
-- Added an additive schema-v1 slice inventory protocol and `redeem slice inventory init|snapshot` CLI while freezing legacy mirror snapshot/list/open behavior.
-- Implemented bounded direct Niri event replay through explicit successful ConfigLoaded, separate Outputs joining, strict complete/degraded validation, deterministic spatial metadata, and hostile-wire rejection.
-- Implemented exact live Zellij/socket/process evidence with active/dead/missing/prefix/duplicate conflict taxonomy and fail-closed relevant-proc-tree/catalog observation.
-- Implemented private boot+socket-filesystem fingerprinting, random epoch rotation, opaque source/session identities, semantic revisions, receive-time acceptance, stale/replay/full-resync handling, and crash-safe enrolled authority persistence.
-- Added protocol/operations documentation plus broad legacy, negotiation, replay, epoch, runtime-ID reuse, degraded-transition, ordering, hostile-metadata, clock-skew, CLI, race, and failure-path tests.
-- Passed full Go tests, full race suite, vet, full Nix flake checks, packaged CLI smokes, and final independent subagent acceptance after resolving all review findings.
-
-### Files Changed
-
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- README.md
-- go.mod
-- flake.nix
-- internal/mirror/snapshot_test.go
-- internal/mirror/testdata/legacy-snapshot.json
-- internal/niriipc/
-- internal/sliceprotocol/
-- internal/sourceinventory/
-- internal/zellijlive/
+Define a stable open-window inventory and revisioned protocol was implemented and validated within the recorded acceptance boundaries.

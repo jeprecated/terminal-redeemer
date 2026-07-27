@@ -3,8 +3,6 @@ package slicecontroller
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +13,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jmo/terminal-redeemer/internal/niriipc"
@@ -153,29 +150,6 @@ func VerifyOwnedWindowsWithConflicts(state State, niri niriipc.State, processes 
 		}
 	}
 	return out, conflicts
-}
-func hasExactPair(argv []string, key, value string) bool {
-	for i := 0; i+1 < len(argv); i++ {
-		if argv[i] == key && argv[i+1] == value {
-			return true
-		}
-	}
-	return false
-}
-func hasExactSequence(argv, sequence []string) bool {
-	for i := 0; i+len(sequence) <= len(argv); i++ {
-		match := true
-		for j := range sequence {
-			if argv[i+j] != sequence[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
 }
 
 type ProjectionCommand struct {
@@ -564,17 +538,4 @@ func applyLocalProposal(ctx context.Context, client LocalNiri, proposal slicelay
 			}
 		}
 	}
-}
-
-func LocalCompositorEpoch(bootID, socketPath string) (string, error) {
-	info, err := os.Lstat(socketPath)
-	if err != nil {
-		return "", err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || info.Mode()&os.ModeSocket == 0 {
-		return "", errors.New("invalid Niri socket")
-	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d", bootID, stat.Dev, stat.Ino)))
-	return "leech-" + hex.EncodeToString(sum[:16]), nil
 }

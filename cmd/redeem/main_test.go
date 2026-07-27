@@ -1259,20 +1259,6 @@ func TestSliceRPCRequestTimeoutIncludesStdinIngestion(t *testing.T) {
 	}
 }
 
-func TestSliceRPCProductionRejectsSpatialApplyBeforeNiriAccess(t *testing.T) {
-	original := sliceRPCInput
-	defer func() { sliceRPCInput = original }()
-	sliceRPCInput = io.NopCloser(strings.NewReader(`{"schema_version":1,"accept_schema_versions":[1],"request_id":"spatial-v1","verb":"spatial_apply","payload":{"source_id":"src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source_epoch":"11111111-1111-4111-8111-111111111111","runtime_window_id":42,"changes":[{"kind":"width_percent","percent":50}]}}`))
-	cfg := config.Defaults()
-	cfg.StateDir = t.TempDir()
-	cfg.Slice.NiriCommand = "/definitely/not/invoked"
-	var out, stderr bytes.Buffer
-	code := runSliceRPC(nil, cfg, &out, &stderr)
-	if code != 2 || !strings.Contains(out.String(), "spatial_apply_unsupported_v1") {
-		t.Fatalf("code=%d out=%s stderr=%s", code, out.String(), stderr.String())
-	}
-}
-
 func TestSliceRPCTypedInvalidAndTokenQuery(t *testing.T) {
 	originalInput := sliceRPCInput
 	defer func() { sliceRPCInput = originalInput }()
@@ -1308,45 +1294,7 @@ func TestSliceRPCTypedInvalidAndTokenQuery(t *testing.T) {
 	}
 }
 
-type spatialTestMutator struct{ actions []any }
-
-func (m *spatialTestMutator) Snapshot(context.Context) (niriipc.State, error) {
-	name := "work"
-	output := "DP-1"
-	return niriipc.State{Outputs: map[string]niriipc.Output{"DP-1": {Name: "DP-1", Logical: niriipc.Logical{Width: 1920, Height: 1080, Scale: 1}}}, Workspaces: []niriipc.Workspace{{ID: 2, Index: 1, Name: &name, Output: &output, IsActive: true}}, Windows: []niriipc.Window{{ID: 42, PID: 10, WorkspaceID: ptrUint64(2), Layout: niriipc.Layout{WindowSize: []int{960, 540}}}, {ID: 99, PID: 11, WorkspaceID: ptrUint64(2), IsFocused: true, Layout: niriipc.Layout{WindowSize: []int{100, 100}}}}}, nil
-}
-func (m *spatialTestMutator) Action(_ context.Context, action any) error {
-	m.actions = append(m.actions, action)
-	return nil
-}
 func ptrUint64(value uint64) *uint64 { return &value }
-func TestHostSpatialRPCRechecksExactSourceAndVerifies(t *testing.T) {
-	sourceID := "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	sessionID := "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	epoch := "11111111-1111-4111-8111-111111111111"
-	now := time.Now().UTC()
-	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 2, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
-	mutator := &spatialTestMutator{}
-	snapshot := func(context.Context) (sliceprotocol.Envelope, error) {
-		current := source
-		if len(mutator.actions) > 0 {
-			current.Layout.WindowWidth = 1152
-		}
-		return sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: epoch, Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{current}, Conflicts: []sliceprotocol.Conflict{}}}, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	payload := slicerpc.SpatialApplyPayload{SourceID: sourceID, SourceEpoch: epoch, RuntimeWindowID: 42, Changes: []slicerpc.SpatialChange{{Kind: "width_percent", Percent: 60}}}
-	if err := applyHostSpatial(ctx, snapshot, mutator, payload, time.Millisecond); err != nil || len(mutator.actions) != 1 {
-		t.Fatalf("apply err=%v actions=%#v", err, mutator.actions)
-	}
-	mutator.actions = nil
-	payload.SourceID = "src_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if err := applyHostSpatial(ctx, snapshot, mutator, payload, time.Millisecond); err == nil || len(mutator.actions) != 0 {
-		t.Fatalf("ownership mismatch mutated: err=%v actions=%#v", err, mutator.actions)
-	}
-}
-
 func TestSliceControllerCLIInitControlAndDisabledDefault(t *testing.T) {
 	root := t.TempDir()
 	var out, stderr bytes.Buffer

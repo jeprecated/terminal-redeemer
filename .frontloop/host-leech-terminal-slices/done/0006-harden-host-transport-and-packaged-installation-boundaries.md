@@ -36,31 +36,6 @@ Make host-leech inventory, exact attachment, and mutation predictable under pack
 
 Depends on the domain ADR, stable protocol, and both executable spikes. Focus on direct socket/RPC runners, token state, exact attachment, config/module boundaries, and operations docs.
 
+## Outcome
 
-## Completion Summary
-
-- Added strict schema-v1 host slice RPC with bounded negotiation, typed snapshot/workspace/liveness/idempotent-launch/token verbs, strict response correlation, and request-wide deadlines.
-- Implemented crash-safe no-replace launch-token authority persisted before side effects, conservative pending ambiguity, direct packaged Kitty launch, and bounded direct OpenSSH transport without authentication or host-key weakening.
-- Implemented exact interactive live-only Zellij attachment through marker-owned mode-0700 hard-link isolation, empty cache, nested-environment scrub, detach-on-force-close, typed exits, and ownership-proven stale GC.
-- Added allowlisted graphical-context resolution, pinned direct Niri compatibility/actions, exact trailing-workspace ensure semantics, and symlink-safe private state boundaries.
-- Added packaged executable injection, Home Manager evaluation, independent slice clipboard disablement, operations/config/protocol docs, and adversarial timeout/replay/path/auth/environment tests.
-- Passed full uncached Go tests, full race suite, vet, full Nix flake checks, packaged smokes, and final independent review after resolving all correctness and security findings.
-
-### Files Changed
-
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- internal/config/config.go
-- internal/config/slice_test.go
-- internal/niriipc/client.go
-- internal/niriipc/client_test.go
-- internal/sliceattach/
-- internal/sliceenv/
-- internal/slicerpc/
-- internal/slicetransport/
-- modules/home-manager/terminal-redeemer.nix
-- flake.nix
-- docs/PROTOCOL.md
-- docs/OPERATIONS.md
-- docs/CONFIG.md
-- README.md
+Harden host transport and packaged installation boundaries was implemented and validated within the recorded acceptance boundaries.

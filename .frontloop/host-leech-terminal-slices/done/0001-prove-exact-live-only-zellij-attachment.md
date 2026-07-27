@@ -29,16 +29,6 @@ Prove a packaged host-side attachment wrapper that can connect a leech projectio
 
 This is an implementation gate for transport, reconciliation, and routed launch. Relevant pinned source is zellij 0.43.1; source review found that live session discovery requires a directory entry whose file type is a socket, resurrection layouts come from XDG cache, and unique-prefix matching must be structurally excluded.
 
+## Outcome
 
-## Completion Summary
-
-- Proved hard-linked private Zellij socket directories support exact active-session attachment while symbolic links are ignored.
-- Proved an empty shim cache blocks resurrection and private socket isolation blocks unique-prefix fallback.
-- Proved explicit on-force-close detach preserves the host session under hostile user configuration and nested-session variables are scrubbed.
-- Added a reproducible flake-locked executable harness, Nix check, and implementation contract covering argv, filesystem layout, outcomes, cleanup, path/version bounds, and residual risks.
-
-### Files Changed
-
-- scripts/spikes/zellij-live-only-attachment.sh
-- docs/spikes/0001-zellij-live-only-attachment.md
-- flake.nix
+Prove exact live-only Zellij attachment was implemented and validated within the recorded acceptance boundaries.

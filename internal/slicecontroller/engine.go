@@ -794,13 +794,6 @@ func (e *Engine) Tick() (State, []Effect, error) {
 	}
 	return state, effects, nil
 }
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func (e *Engine) Reconnect(sourceID string) (State, []Effect, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -876,17 +869,6 @@ func matchingDesiredSources(state State, sessionID, oldID string) []string {
 	sort.Strings(ids)
 	return ids
 }
-func matchingSources(state State, sessionID string) []string {
-	var ids []string
-	for id, s := range state.Sources {
-		if s.Lifecycle == SourceEligible && s.SessionID == sessionID {
-			ids = append(ids, id)
-		}
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 func (e *Engine) handleEpochReplacement(state *State, old, new sliceprotocol.Authoritative, now time.Time) []Effect {
 	newBySession := map[string][]sliceprotocol.Source{}
 	for _, source := range new.Sources {
@@ -1133,26 +1115,6 @@ func (e *Engine) RecordSpatial(sourceID string, result slicelayout.Result) (Stat
 		record.Conflict = ""
 	}
 	var effects []Effect
-	if result.SuggestedBaseline != nil {
-		if len(result.Proposals) == 0 {
-			record.Baseline = result.SuggestedBaseline
-			record.PendingBaseline = nil
-		} else {
-			advance := true
-			for _, proposal := range result.Proposals {
-				for _, change := range proposal.Changes {
-					if change.Kind == slicelayout.ChangeEnsureWorkspace || change.Kind == slicelayout.ChangeInitialProjection {
-						advance = false
-					}
-				}
-			}
-			if advance {
-				record.PendingBaseline = result.SuggestedBaseline
-			} else {
-				record.PendingBaseline = nil
-			}
-		}
-	}
 	for i := range result.Proposals {
 		p := result.Proposals[i]
 		if p.Target == slicelayout.Host {
@@ -1178,7 +1140,6 @@ func (e *Engine) RecordSpatialFailure(sourceID, code string) (State, error) {
 	}
 	record := state.Spatial[sourceID]
 	record.LastApplied = nil
-	record.PendingBaseline = nil
 	record.Conflict = code
 	now := e.now()
 	c := e.config()
@@ -1198,10 +1159,6 @@ func (e *Engine) RecordSpatialFailure(sourceID, code string) (State, error) {
 		record.Recovery.NextAttemptAt = now.Add(backoff)
 	}
 	state.Spatial[sourceID] = record
-	if state.AuthorityMode == slicelayout.LeechLocation {
-		state.AuthorityMode = slicelayout.HostLocation
-		state.LeechWriteAuthorized = false
-	}
 	if err := e.commit(&state, "spatial_execution_failed", sourceID); err != nil {
 		return State{}, err
 	}
@@ -1216,35 +1173,11 @@ func (e *Engine) CompleteSpatial(sourceID string) (State, error) {
 		return State{}, err
 	}
 	record := state.Spatial[sourceID]
-	if record.PendingBaseline != nil {
-		record.Baseline = record.PendingBaseline
-		record.PendingBaseline = nil
-	}
 	record.LastApplied = nil
 	record.Recovery = nil
 	record.Conflict = ""
 	state.Spatial[sourceID] = record
 	if err := e.commit(&state, "spatial_verified", sourceID); err != nil {
-		return State{}, err
-	}
-	return state, nil
-}
-func (e *Engine) CommitAuthorityMode(mode slicelayout.AuthorityMode, authorized bool) (State, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	state, err := e.load()
-	if err != nil {
-		return State{}, err
-	}
-	if mode != slicelayout.HostLocation || authorized {
-		return State{}, errors.New("v1 supports only host_location authority without leech write authorization")
-	}
-	if state.AuthorityMode == mode && state.LeechWriteAuthorized == authorized {
-		return state, nil
-	}
-	state.AuthorityMode = mode
-	state.LeechWriteAuthorized = authorized
-	if err := e.commit(&state, "authority_mode", string(mode)); err != nil {
 		return State{}, err
 	}
 	return state, nil

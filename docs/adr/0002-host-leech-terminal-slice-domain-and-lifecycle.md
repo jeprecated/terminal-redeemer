@@ -8,7 +8,7 @@
 
 When this ADR was proposed, Terminal Redeemer had an explicit, one-shot live-mirror workflow and a separate prior-boot resume workflow, but neither defined the continuous selection, ownership, recovery, or spatial semantics required to project selected live host terminals onto another machine safely. The common domain contract below preceded the protocol, persistence, controller, and routed-launch implementation.
 
-This ADR originated as the contract rather than a claim about the legacy mirror implementation. The final v1 amendments below now describe the opt-in controller, revisioned protocol, and routed launch implementation: v1 ships host-location only, while leech-location remains dormant reserved v1.1 specification.
+This ADR originated as the contract rather than a claim about the legacy mirror implementation. The final v1 amendments below now describe the opt-in controller, revisioned protocol, routed launch implementation, and host-authoritative spatial convergence.
 
 ## Decision drivers
 
@@ -109,12 +109,7 @@ MVP spatial fidelity includes:
 
 Exact continuous order correction is stretch-only. The system must not use visible, racy focus-dance operations to imply exact live order synchronization in MVP.
 
-Location authority is explicit:
-
-- In shipped **host-location v1**, host workspace, tiled/floating state, proportional width, and proportional height continuously converge the owned leech projection. Leech divergence in those supported properties is reverted and never written back to the host; order drift remains report-only.
-- **Leech-location** remains a dormant v1.1 specification only, with no supported v1 configuration, state, RPC registration, or effect path. If enabled in a future version, authorized leech changes to workspace, tiled/floating state, and proportional size may be written to the matching host source, with ownership checks, bounded verify-after-write, and feedback-loop prevention. This delegates only the listed placement authority. It never transfers source-window, Zellij-session, or process lifecycle ownership. Exact order writeback remains excluded.
-
-Host-location is the shipped v1 controller path described by the final amendment above. Leech-location and host-target mutation remain dormant reserved v1.1 specification; this ADR does not claim they are shipped.
+Location authority belongs to the host. Host workspace, tiled/floating state, proportional width, and proportional height continuously converge the owned leech projection. Leech divergence in those supported properties is reverted and never written back to the host; order drift remains report-only. Host-target spatial mutation is outside the controller model.
 
 ### 6. Routed-launch idempotency invariant
 
@@ -240,7 +235,7 @@ This is evidence for one-shot **interactive attach only**. It does not test conc
 
 ### A.2 Niri inventory and safe spatial mutations
 
-[Spike 0002](../spikes/0002-niri-direct-ipc.md) passed against repository-pinned Niri 25.11 and Kitty 0.45.0 using [`scripts/spikes/niri-direct-ipc.sh`](../../scripts/spikes/niri-direct-ipc.sh), [`scripts/spikes/niri-direct-ipc-probe.py`](../../scripts/spikes/niri-direct-ipc-probe.py), and reusable [`internal/niri/testdata/ipc-*`](../../internal/niri/testdata/) fixtures.
+[Spike 0002](../spikes/0002-niri-direct-ipc.md) passed against repository-pinned Niri 25.11 and Kitty 0.45.0 using [`scripts/spikes/niri-direct-ipc.sh`](../../scripts/spikes/niri-direct-ipc.sh) and [`scripts/spikes/niri-direct-ipc-probe.py`](../../scripts/spikes/niri-direct-ipc-probe.py); production IPC behavior is covered in `internal/niriipc`.
 
 The executable proof establishes that:
 
@@ -274,7 +269,7 @@ Acceptance review confirms that:
 - routed launch retains one identity and never automatically falls back locally;
 - the MVP fidelity boundary and exact-order stretch goal are explicit;
 - the spike evidence and every residual limitation above remain linked and accurately scoped; and
-- historical deferrals are marked as such, host-location protocol/controller/routed launch are implemented but disabled by default, and future leech-location writeback is not claimed as shipped.
+- historical deferrals are marked as such, and the host-authoritative protocol/controller/routed launch are implemented but disabled by default.
 
 ## Non-goals
 

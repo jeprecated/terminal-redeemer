@@ -28,7 +28,6 @@ const (
 	VerbLaunch          Verb = "launch"
 	VerbTokenQuery      Verb = "token_query"
 	VerbTokenReplay     Verb = "token_replay"
-	VerbSpatialApply    Verb = "spatial_apply"
 )
 
 type Request struct {
@@ -74,18 +73,6 @@ type TokenPayload struct {
 }
 type WorkspaceEnsurePayload struct {
 	Name string `json:"name"`
-}
-type SpatialChange struct {
-	Kind               string  `json:"kind"`
-	WorkspaceRuntimeID uint64  `json:"workspace_runtime_id,omitempty"`
-	Mode               string  `json:"mode,omitempty"`
-	Percent            float64 `json:"percent,omitempty"`
-}
-type SpatialApplyPayload struct {
-	SourceID        string          `json:"source_id"`
-	SourceEpoch     string          `json:"source_epoch"`
-	RuntimeWindowID uint64          `json:"runtime_window_id"`
-	Changes         []SpatialChange `json:"changes"`
 }
 
 func DecodeRequestContext(ctx context.Context, reader io.Reader) (Request, error) {
@@ -149,7 +136,7 @@ func DecodeRequest(reader io.Reader) (Request, error) {
 		return Request{}, errors.New("unsupported schema version")
 	}
 	switch request.Verb {
-	case VerbLiveness, VerbSnapshot, VerbWorkspaceEnsure, VerbLaunch, VerbTokenQuery, VerbTokenReplay, VerbSpatialApply:
+	case VerbLiveness, VerbSnapshot, VerbWorkspaceEnsure, VerbLaunch, VerbTokenQuery, VerbTokenReplay:
 	default:
 		return Request{}, fmt.Errorf("unsupported RPC verb %q", request.Verb)
 	}

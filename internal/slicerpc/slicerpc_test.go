@@ -450,24 +450,3 @@ func TestTokenStateRejectsCorruptionAndUnsafeMode(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
-
-func TestSpatialApplyStrictOwnershipPayloadAndTypedResult(t *testing.T) {
-	called := 0
-	server := Server{SpatialApply: func(_ context.Context, payload SpatialApplyPayload) error {
-		called++
-		if payload.SourceID != "src_test" || payload.SourceEpoch != "epoch-1" || payload.RuntimeWindowID != 42 {
-			t.Fatalf("payload=%#v", payload)
-		}
-		return nil
-	}}
-	payload := SpatialApplyPayload{SourceID: "src_test", SourceEpoch: "epoch-1", RuntimeWindowID: 42, Changes: []SpatialChange{{Kind: "width_percent", Percent: 50}}}
-	response := server.Handle(context.Background(), request(VerbSpatialApply, payload))
-	if response.Outcome.Status != StatusOK || called != 1 {
-		t.Fatalf("response=%#v called=%d", response, called)
-	}
-	bad := SpatialApplyPayload{SourceID: "src_test", SourceEpoch: "epoch-1", RuntimeWindowID: 42, Changes: []SpatialChange{{Kind: "workspace"}}}
-	response = server.Handle(context.Background(), request(VerbSpatialApply, bad))
-	if response.Outcome.Code != "invalid_spatial_apply" || called != 1 {
-		t.Fatalf("invalid response=%#v", response)
-	}
-}

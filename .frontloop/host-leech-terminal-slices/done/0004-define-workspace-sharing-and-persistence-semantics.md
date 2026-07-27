@@ -36,16 +36,6 @@ Codify the operator-approved model in which the leech can browse any eligible op
 
 Depends on the domain ADR and the resolved source-identity/epoch contract. Keep host session lifecycle authoritative and leech selection/connection state local. This task defines semantics only and does not edit mono-nix or activate machines.
 
+## Outcome
 
-## Completion Summary
-
-- Added ADR 0003 defining publication-free discovery, canonical workspace selection, exact pickup/close/reopen semantics, and automatic inclusion of current and future eligible sources.
-- Defined monotonic revision/epoch acceptance, deterministic degraded/absence/close/move/restart behavior, and three safe source-epoch replacement paths.
-- Defined bounded recovery that survives restart without budget reset, explicit cross-epoch successor lineage, and a non-prunable exhausted-successor gate requiring explicit reconnect.
-- Defined one logical atomic current-state boundary, safe first-time namespace initialization, namespaced routed tokens, and bounded inspectable audit/undo history that cannot prune active authority.
-- Extended README ADR navigation and passed independent subagent review after resolving snapshot-ordering, successor-formula, epoch-cleanup, and initialization findings.
-
-### Files Changed
-
-- docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md
-- README.md
+Define workspace sharing and persistence semantics was implemented and validated within the recorded acceptance boundaries.

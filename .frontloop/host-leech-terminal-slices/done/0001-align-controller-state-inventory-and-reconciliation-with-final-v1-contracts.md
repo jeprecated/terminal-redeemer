@@ -30,40 +30,6 @@ Apply the corrected contracts to reachable v1 code while preserving the already-
 
 Likely areas: internal/config, modules/home-manager, cmd/redeem, internal/slicecontroller, internal/slicelayout, internal/sourceinventory, and protocol/state fixtures. Treat previously completed task 0008 as substantial reusable implementation, not as a restart.
 
+## Outcome
 
-## Completion Summary
-
-- Locked supported v1 configuration/runtime to host-location only and made host spatial writeback unreachable.
-- Changed complete inventory to carry/hash verified live-session IDs and advance revision on every successful complete poll while degraded/replay/conflict observations remain non-authoritative.
-- Migrated controller authority to schema 2 session-keyed drops that survive epochs/headless sessions and expire only after accepted complete absence confirmations plus committed grace.
-- Made host-location reconciliation converge workspace, tiled/floating state, width, and height while keeping order report-only.
-- Added explicit fail-closed pre-release backup/re-enrolment guidance and broad hermetic regression coverage.
-- Resolved two independent review rounds; final reviewer reported PASS with no blockers.
-
-### Files Changed
-
-- cmd/redeem/main.go
-- cmd/redeem/main_test.go
-- internal/config/config.go
-- internal/config/slice_test.go
-- internal/slicecontroller/types.go
-- internal/slicecontroller/engine.go
-- internal/slicecontroller/controller_test.go
-- internal/slicelayout/policy.go
-- internal/slicelayout/policy_test.go
-- internal/sliceprotocol/types.go
-- internal/sliceprotocol/validate.go
-- internal/sliceprotocol/canonical.go
-- internal/sliceprotocol/protocol_test.go
-- internal/sourceinventory/publisher.go
-- internal/sourceinventory/sourceinventory_test.go
-- modules/home-manager/terminal-redeemer.nix
-- flake.nix
-- docs/PROTOCOL.md
-- docs/CONFIG.md
-- docs/OPERATIONS.md
-- docs/HOST_LEECH_READINESS.md
-- docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md
-- docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md
-- docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md
-- docs/testing/host-leech-hermetic-matrix.md
+Align controller state, inventory, and reconciliation with final v1 contracts was implemented and validated within the recorded acceptance boundaries.

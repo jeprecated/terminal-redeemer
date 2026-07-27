@@ -1217,7 +1217,7 @@ func TestModelHostLocationGeneratedConvergence(t *testing.T) {
 				operations = append(operations, fmt.Sprintf("kind=%d host_workspace=%s host_mode=%s host_size=%dx%d host_order=%d/%d leech_workspace=%s leech_mode=%s leech_size=%dx%d leech_order=%d/%d", operation, hostWorkspace, hostMode, hostWidth, hostHeight, hostOrder.Column, hostOrder.Tile, leechWorkspace, leechMode, leechWidth, leechHeight, leechOrder.Column, leechOrder.Tile))
 				host := modelLayoutObservation("source-model", "host-epoch", 10, hostWorkspace, hostMode, hostWidth, hostHeight, hostOrder)
 				leech := modelLayoutObservation("source-model", "leech-epoch", 20, leechWorkspace, leechMode, leechWidth, leechHeight, leechOrder)
-				input := slicelayout.Input{Mode: slicelayout.HostLocation, PreviousMode: slicelayout.HostLocation, ControllerID: "model-controller", Generation: uint64(step + 1), Host: host, Leech: &leech, HostWorkspaces: modelLayoutWorkspaces(), LeechWorkspaces: modelLayoutWorkspaces(), Ownership: slicelayout.Ownership{SourceID: host.SourceID, HostCompositorEpoch: host.SourceEpoch, LeechCompositorEpoch: leech.SourceEpoch, HostRuntimeWindowID: host.RuntimeWindowID, LeechRuntimeWindowID: leech.RuntimeWindowID, ProjectionPositivelyOwned: true}}
+				input := slicelayout.Input{ControllerID: "model-controller", Generation: uint64(step + 1), Host: host, Leech: &leech, HostWorkspaces: modelLayoutWorkspaces(), LeechWorkspaces: modelLayoutWorkspaces(), Ownership: slicelayout.Ownership{SourceID: host.SourceID, HostCompositorEpoch: host.SourceEpoch, LeechCompositorEpoch: leech.SourceEpoch, HostRuntimeWindowID: host.RuntimeWindowID, LeechRuntimeWindowID: leech.RuntimeWindowID, ProjectionPositivelyOwned: true}}
 				result := slicelayout.Plan(input)
 				want := map[slicelayout.ChangeKind]bool{}
 				if strings.ToLower(hostWorkspace) != strings.ToLower(leechWorkspace) {
@@ -1279,29 +1279,4 @@ func failSpatialModel(t *testing.T, seed int64, step int, operations []string, e
 	t.Helper()
 	payload, _ := json.Marshal(operations)
 	t.Fatalf("seed=%d step=%d error=%v\nreplay operations=%s", seed, step, err, payload)
-}
-
-func TestModelStateCapsAndExactHandoffTombstones(t *testing.T) {
-	state := NewState(Namespace{Host: "host", Leech: "leech"}, "model-controller")
-	base := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
-	count := MaxLaunchHandoffs + 17
-	for index := 0; index < count; index++ {
-		token := fmt.Sprintf("model-token-%04d", index)
-		state.LaunchHandoffs[token] = LaunchHandoff{Token: token, Status: "failed", HostTerminalID: fmt.Sprintf("terminal-%04d", index), UpdatedAt: base.Add(time.Duration(index) * time.Second)}
-	}
-	if err := state.Compact(); err != nil {
-		t.Fatal(err)
-	}
-	if len(state.LaunchHandoffs) != MaxLaunchHandoffs || len(state.RetiredHandoffTokens) != 17 {
-		t.Fatalf("live=%d retired=%d", len(state.LaunchHandoffs), len(state.RetiredHandoffTokens))
-	}
-	for index, token := range state.RetiredHandoffTokens {
-		want := fmt.Sprintf("model-token-%04d", index)
-		if token != want || !retiredHandoffContains(state, token) {
-			t.Fatalf("tombstone[%d]=%q want=%q", index, token, want)
-		}
-	}
-	if err := state.Validate(); err != nil {
-		t.Fatal(err)
-	}
 }
