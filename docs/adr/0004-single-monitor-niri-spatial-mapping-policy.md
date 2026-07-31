@@ -1,6 +1,6 @@
 # ADR 0004: Single-monitor Niri spatial mapping policy
 
-- **Status:** Proposed
+- **Status:** Accepted for v1 (disabled by default)
 - **Date:** 2026-07-25
 - **Decision owners:** Terminal Redeemer maintainers
 

@@ -27,6 +27,7 @@ type modelController struct {
 	revision uint64
 	digest   string
 	retired  map[string]bool
+	all      bool
 	selected map[string]bool
 	pickups  map[string]bool
 	drops    map[string]modelDrop
@@ -178,6 +179,10 @@ func (m *modelController) selectWorkspace(key string, enabled bool) {
 	m.undo = append(m.undo, modelUndo{kind: "workspace", key: key, previous: previous})
 }
 
+func (m *modelController) selectAll(enabled bool) {
+	m.all = enabled
+}
+
 func (m *modelController) pickup(id string, enabled bool) {
 	previous := m.pickups[id]
 	if previous == enabled {
@@ -285,7 +290,7 @@ func (m *modelController) wanted(id string) bool {
 	if !ok || (source.lifecycle != SourceEligible && source.lifecycle != SourceGoneGrace) {
 		return false
 	}
-	return (m.selected[source.workspace] || m.pickups[id]) && func() bool { _, dropped := m.drops[source.session]; return !dropped }()
+	return (m.all || m.selected[source.workspace] || m.pickups[id]) && func() bool { _, dropped := m.drops[source.session]; return !dropped }()
 }
 
 type modelOp struct {
@@ -530,6 +535,13 @@ func (r *modelRun) apply(op modelOp) ([]Effect, error) {
 			return nil, err
 		}
 		r.oracle.selectWorkspace("work", op.Enabled)
+		effects = got
+	case "all":
+		_, got, err := r.engine.SelectAll(op.Enabled)
+		if err != nil {
+			return nil, err
+		}
+		r.oracle.selectAll(op.Enabled)
 		effects = got
 	case "pickup":
 		id := r.currentSource(op.Slot)
@@ -922,6 +934,9 @@ func (r *modelRun) check(pre State, op modelOp, effects []Effect) error {
 	if len(state.Sources) > MaxTerminalSources || len(state.Projections) > MaxTerminalSources || len(state.ClosedByUser) > MaxTerminalSources || len(state.SelectedWorkspaces) > MaxSelectedWorkspaces || len(state.SuccessorGates) > MaxSuccessorGates || len(state.PendingCleanups) > MaxSuccessorGates || len(state.Lineage) > MaxLineageRecords || len(state.LaunchHandoffs) > MaxLaunchHandoffs || len(state.RetiredHandoffTokens) > MaxRetiredHandoffTombstones || len(state.Spatial) > MaxSpatialRecords || len(state.Audit) > MaxAuditEntries || len(state.Undo) > MaxUndoEntries || len(state.Acceptance.RetiredEpochs) > sliceprotocol.MaxRetiredEpochTombstones {
 		return errors.New("persisted state cap exceeded")
 	}
+	if state.AllEligible != r.oracle.all {
+		return fmt.Errorf("all eligible=%t oracle=%t", state.AllEligible, r.oracle.all)
+	}
 	for key := range r.oracle.selected {
 		if state.SelectedWorkspaces[key] == "" {
 			return fmt.Errorf("selected workspace %q missing", key)
@@ -968,7 +983,7 @@ func (r *modelRun) check(pre State, op modelOp, effects []Effect) error {
 			for pickedID := range r.oracle.pickups {
 				picked = picked || r.oracle.sources[pickedID].session == actual.SessionID
 			}
-			desired := (r.oracle.selected[actual.WorkspaceKey] || picked) && !dropped
+			desired := (r.oracle.all || r.oracle.selected[actual.WorkspaceKey] || picked) && !dropped
 			eligible := actual.Lifecycle == SourceEligible || actual.Lifecycle == SourceGoneGrace
 			if !desired || !eligible {
 				return fmt.Errorf("launch for oracle-unwanted source %s desired=%t lifecycle=%s", effect.SourceID, desired, actual.Lifecycle)
@@ -1091,7 +1106,8 @@ func (r *modelRun) assertMandatoryWitnesses() error {
 func controllerPrefix() []modelOp {
 	return []modelOp{
 		{Kind: "undo", Outcome: "no_target"},
-		{Kind: "complete"}, {Kind: "select", Enabled: true}, {Kind: "undo", Outcome: "target"},
+		{Kind: "complete"}, {Kind: "all", Enabled: true}, {Kind: "all", Enabled: false},
+		{Kind: "select", Enabled: true}, {Kind: "undo", Outcome: "target"},
 		{Kind: "cleanup"}, {Kind: "select", Enabled: true},
 		{Kind: "connect", Slot: 0, Required: true}, {Kind: "attachment_loss", Slot: 0, Required: true},
 		{Kind: "restart", Required: true}, {Kind: "cleanup"}, {Kind: "source_conflict"},
@@ -1116,7 +1132,7 @@ func controllerPrefix() []modelOp {
 
 func generatedControllerOps(seed int64, count int) []modelOp {
 	rng := rand.New(rand.NewSource(seed))
-	kinds := []string{"complete", "complete", "headless", "absent", "source_conflict", "order", "rotate", "replay", "degraded", "duplicate", "stale", "conflict", "select", "close", "reopen", "launch_fail", "connect", "attachment_loss", "process_loss", "cleanup", "advance", "restart", "reconnect", "handoff"}
+	kinds := []string{"complete", "complete", "headless", "absent", "source_conflict", "order", "rotate", "replay", "degraded", "duplicate", "stale", "conflict", "select", "all", "close", "reopen", "launch_fail", "connect", "attachment_loss", "process_loss", "cleanup", "advance", "restart", "reconnect", "handoff"}
 	ops := append([]modelOp(nil), controllerPrefix()...)
 	for len(ops) < count {
 		kind := kinds[rng.Intn(len(kinds))]

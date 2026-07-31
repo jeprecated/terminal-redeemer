@@ -1,6 +1,7 @@
 package consumercontract_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -19,7 +20,8 @@ import (
 )
 
 type runtimeContract struct {
-	Protocol struct {
+	ContractVersion string `json:"contract_version"`
+	Protocol        struct {
 		InventorySchemaVersions  []int  `json:"inventory_schema_versions"`
 		RPCSchemaVersions        []int  `json:"rpc_schema_versions"`
 		ControllerSchemaVersions []int  `json:"controller_schema_versions"`
@@ -29,6 +31,16 @@ type runtimeContract struct {
 		NiriVersion   string `json:"niri_version"`
 		ZellijVersion string `json:"zellij_version"`
 	} `json:"compatibility"`
+	Selection struct {
+		Formula                        string `json:"formula"`
+		AllEligibleScope               string `json:"all_eligible_scope"`
+		UnnamedSpatialPolicy           string `json:"unnamed_spatial_policy"`
+		RoutedLaunchPolicy             string `json:"routed_launch_policy"`
+		AllEligibleStateField          string `json:"all_eligible_state_field"`
+		AllEligibleUndoable            bool   `json:"all_eligible_undoable"`
+		PriorReaderBehaviorWhenEnabled string `json:"prior_reader_behavior_when_enabled"`
+		DowngradeRequiresDisableFirst  bool   `json:"downgrade_requires_disable_first"`
+	} `json:"selection"`
 	Defaults struct {
 		LeechModeEnabled        bool   `json:"leech_mode_enabled"`
 		ControllerEnabled       bool   `json:"controller_enabled"`
@@ -41,6 +53,16 @@ type runtimeContract struct {
 		SourceGoneGrace         string `json:"source_gone_grace"`
 		SourceGoneConfirmations int    `json:"source_gone_confirmations"`
 	} `json:"defaults"`
+	Commands struct {
+		Manage               []string `json:"manage"`
+		ControllerOperations []string `json:"controller_operations"`
+	} `json:"commands"`
+	Configuration struct {
+		ReadOnlyOptions []string `json:"read_only_options"`
+	} `json:"configuration"`
+	Integration struct {
+		ManageHelperOption string `json:"manage_helper_option"`
+	} `json:"integration"`
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -76,6 +98,9 @@ func TestConsumerContractRuntimeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if contract.ContractVersion != "1.1.0" {
+		t.Fatalf("contract version=%q, want 1.1.0", contract.ContractVersion)
+	}
 	if got, want := contract.Protocol.InventorySchemaVersions, []int{int(sliceprotocol.SchemaVersion)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("inventory schema versions=%v, want runtime %v", got, want)
 	}
@@ -87,6 +112,31 @@ func TestConsumerContractRuntimeValues(t *testing.T) {
 	}
 	if contract.Protocol.WorkspaceNormalization != sliceprotocol.WorkspaceNormalization {
 		t.Fatalf("workspace normalization=%q, want runtime %q", contract.Protocol.WorkspaceNormalization, sliceprotocol.WorkspaceNormalization)
+	}
+	selection := contract.Selection
+	if selection.Formula != "(all_eligible OR selected_workspace OR exact_pickup) AND NOT closed_by_user" ||
+		selection.AllEligibleScope != "current_and_future_eligible_sources_including_unnamed_workspaces" ||
+		selection.UnnamedSpatialPolicy != "attach_without_cross_machine_spatial_placement" ||
+		selection.RoutedLaunchPolicy != "explicit_selected_named_workspaces_only" ||
+		selection.AllEligibleStateField != "optional_omitempty_boolean" || selection.AllEligibleUndoable ||
+		selection.PriorReaderBehaviorWhenEnabled != "reject_unknown_field" || !selection.DowngradeRequiresDisableFirst {
+		t.Fatalf("selection contract drifted: %#v", selection)
+	}
+	baseState := slicecontroller.NewState(slicecontroller.Namespace{Host: "host", Leech: "leech"}, "controller-test")
+	baseJSON, err := json.Marshal(baseState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(baseJSON, []byte(`"all_eligible"`)) {
+		t.Fatalf("false all_eligible must be omitted: %s", baseJSON)
+	}
+	baseState.AllEligible = true
+	enabledJSON, err := json.Marshal(baseState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(enabledJSON, []byte(`"all_eligible":true`)) {
+		t.Fatalf("enabled all_eligible must be explicit: %s", enabledJSON)
 	}
 
 	cfg := config.Defaults()
@@ -106,6 +156,26 @@ func TestConsumerContractRuntimeValues(t *testing.T) {
 	if contract.Compatibility.NiriVersion != cfg.Slice.ExpectedNiriVersion || contract.Compatibility.ZellijVersion != zellijlive.PinnedVersion {
 		t.Fatalf("pinned compatibility drifted: contract=%#v runtime niri=%q zellij=%q", contract.Compatibility, cfg.Slice.ExpectedNiriVersion, zellijlive.PinnedVersion)
 	}
+
+	if got, want := contract.Commands.Manage, []string{"$REDEEM", "slice", "manage"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("manage command=%v, want %v", got, want)
+	}
+	wantOperations := []string{"workspace-add", "workspace-remove", "all-enable", "all-disable", "pickup", "pickup-remove", "drop", "close", "reopen", "undo", "reconnect", "launch-handoff"}
+	if !reflect.DeepEqual(contract.Commands.ControllerOperations, wantOperations) {
+		t.Fatalf("controller operations=%v, want %v", contract.Commands.ControllerOperations, wantOperations)
+	}
+	if !contains(contract.Configuration.ReadOnlyOptions, "manageCommand") || contract.Integration.ManageHelperOption != "programs.terminal-redeemer.slice.manageCommand" {
+		t.Fatalf("manage module contract drifted: read-only=%v helper=%q", contract.Configuration.ReadOnlyOptions, contract.Integration.ManageHelperOption)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConsumerContractStrictJSON(t *testing.T) {

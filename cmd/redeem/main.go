@@ -47,6 +47,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 	"github.com/jmo/terminal-redeemer/internal/slicerpc"
 	"github.com/jmo/terminal-redeemer/internal/slicetransport"
+	"github.com/jmo/terminal-redeemer/internal/slicetui"
 	"github.com/jmo/terminal-redeemer/internal/snapshots"
 	"github.com/jmo/terminal-redeemer/internal/sourceinventory"
 	"github.com/jmo/terminal-redeemer/internal/tui"
@@ -169,7 +170,7 @@ func runDoctor(flags globalFlags, stdout io.Writer) int {
 
 func runSlice(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 || isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem slice <inventory|rpc|attach|host-attach|controller|mode|launch|projection-run|close-focused> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem slice <inventory|rpc|attach|host-attach|controller|mode|launch|manage|projection-run|close-focused> [flags]")
 		if len(args) == 0 {
 			return 2
 		}
@@ -188,6 +189,8 @@ func runSlice(args []string, resolvedConfig config.Config, stdout io.Writer, std
 		return runSliceMode(args[1:], resolvedConfig, stdout, stderr)
 	case "launch":
 		return runSliceLaunch(args[1:], resolvedConfig, stdout, stderr)
+	case "manage":
+		return runSliceManage(args[1:], resolvedConfig, stdout, stderr)
 	case "projection-run":
 		return runSliceProjection(args[1:], resolvedConfig, stdout, stderr)
 	case "close-focused":
@@ -594,13 +597,44 @@ func runSliceLaunch(args []string, cfg config.Config, stdout io.Writer, stderr i
 	return 0
 }
 
+var runSliceManageUI = slicetui.Run
+
+func runSliceManage(args []string, cfg config.Config, _ io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("slice manage", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	stateDir := fs.String("state-dir", cfg.StateDir, "state directory")
+	timeout := fs.Duration("timeout", cfg.Slice.Controller.ControlTimeout, "bounded controller request timeout")
+	refresh := fs.Duration("refresh-interval", cfg.Slice.Controller.PollInterval, "live status refresh interval")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 || *timeout <= 0 || *refresh <= 0 {
+		_, _ = fmt.Fprintln(stderr, "slice manage accepts flags only and requires positive timeout and refresh interval")
+		return 2
+	}
+	socketPath, err := slicecontroller.ControlSocketPath(*stateDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "slice manage failed: %v\n", err)
+		return 1
+	}
+	client := slicetui.SocketClient{Path: socketPath, Timeout: *timeout}
+	if err := runSliceManageUI(client, *refresh, *timeout); err != nil {
+		_, _ = fmt.Fprintf(stderr, "slice manage failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func controllerEngineConfig(cfg config.Config) slicecontroller.ControllerConfig {
 	return slicecontroller.ControllerConfig{Namespace: slicecontroller.Namespace{Host: cfg.Slice.Controller.HostID, Leech: cfg.Slice.Controller.LeechID}, RetryWindow: cfg.Slice.Controller.RetryWindow, RetryInitialBackoff: cfg.Slice.RetryInitialBackoff, RetryMaxBackoff: cfg.Slice.RetryMaxBackoff, RetryMaxAttempts: cfg.Slice.RetryMaxAttempts, SourceGoneGrace: cfg.Slice.Controller.SourceGoneGrace, SourceGoneConfirmations: cfg.Slice.Controller.SourceGoneConfirmations}
 }
 
 func runSliceController(args []string, cfg config.Config, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 || isHelpToken(args[0]) {
-		_, _ = fmt.Fprintln(stdout, "usage: redeem slice controller <init|run|status|workspace-add|workspace-remove|pickup|drop|close|reopen|undo|reconnect|launch-handoff> [flags]")
+		_, _ = fmt.Fprintln(stdout, "usage: redeem slice controller <init|run|status|workspace-add|workspace-remove|all-enable|all-disable|pickup|pickup-remove|drop|close|reopen|undo|reconnect|launch-handoff> [flags]")
 		if len(args) == 0 {
 			return 2
 		}
@@ -640,7 +674,7 @@ func runSliceController(args []string, cfg config.Config, stdout io.Writer, stde
 	if args[0] == "run" {
 		return runSliceControllerForeground(args[1:], cfg, stdout, stderr)
 	}
-	verbMap := map[string]slicecontroller.ControlVerb{"status": slicecontroller.VerbStatus, "workspace-add": slicecontroller.VerbWorkspaceAdd, "workspace-remove": slicecontroller.VerbWorkspaceRemove, "pickup": slicecontroller.VerbPickup, "drop": slicecontroller.VerbDrop, "close": slicecontroller.VerbClose, "reopen": slicecontroller.VerbReopen, "undo": slicecontroller.VerbUndo, "reconnect": slicecontroller.VerbReconnect, "launch-handoff": slicecontroller.VerbLaunchHandoff}
+	verbMap := map[string]slicecontroller.ControlVerb{"status": slicecontroller.VerbStatus, "workspace-add": slicecontroller.VerbWorkspaceAdd, "workspace-remove": slicecontroller.VerbWorkspaceRemove, "all-enable": slicecontroller.VerbAllEnable, "all-disable": slicecontroller.VerbAllDisable, "pickup": slicecontroller.VerbPickup, "pickup-remove": slicecontroller.VerbPickupRemove, "drop": slicecontroller.VerbDrop, "close": slicecontroller.VerbClose, "reopen": slicecontroller.VerbReopen, "undo": slicecontroller.VerbUndo, "reconnect": slicecontroller.VerbReconnect, "launch-handoff": slicecontroller.VerbLaunchHandoff}
 	verb, ok := verbMap[args[0]]
 	if !ok {
 		_, _ = fmt.Fprintf(stderr, "unknown slice controller subcommand: %s\n", args[0])
@@ -670,7 +704,7 @@ func runSliceController(args []string, cfg config.Config, stdout io.Writer, stde
 	switch verb {
 	case slicecontroller.VerbWorkspaceAdd, slicecontroller.VerbWorkspaceRemove:
 		payload = slicecontroller.WorkspacePayload{Name: *workspace}
-	case slicecontroller.VerbPickup, slicecontroller.VerbDrop, slicecontroller.VerbClose, slicecontroller.VerbReopen, slicecontroller.VerbReconnect:
+	case slicecontroller.VerbPickup, slicecontroller.VerbPickupRemove, slicecontroller.VerbDrop, slicecontroller.VerbClose, slicecontroller.VerbReopen, slicecontroller.VerbReconnect:
 		payload = slicecontroller.SourcePayload{SourceID: *sourceID}
 	case slicecontroller.VerbLaunchHandoff:
 		payload = slicecontroller.LaunchHandoff{Token: *token, Status: *status, HostTerminalID: *terminalID}
@@ -845,6 +879,9 @@ func planControllerSpatial(ctx context.Context, engine *slicecontroller.Engine, 
 		}
 	}
 	for _, hostSource := range state.Inventory.Sources {
+		if hostSource.Workspace.Key == "" {
+			continue
+		}
 		ownedWindow, ok := ownedBySource[hostSource.SourceID]
 		if !ok {
 			continue
@@ -981,6 +1018,9 @@ func executeSliceControllerEffectsWithProcesses(ctx context.Context, engine *sli
 			}
 			for _, window := range owned {
 				if window.SourceID == effect.SourceID && window.WindowID == effect.WindowID {
+					if effect.FocusRequired && !window.Focused {
+						return errors.New("focused projection changed before close mutation")
+					}
 					positive = true
 					break
 				}
@@ -1212,7 +1252,7 @@ func runSliceCloseFocused(args []string, cfg config.Config, stdout io.Writer, st
 		_, _ = fmt.Fprintln(stderr, "focused window is not a positively owned slice projection")
 		return 1
 	}
-	request := slicecontroller.NewControlRequest(slicecontroller.VerbClose, slicecontroller.SourcePayload{SourceID: focused.SourceID})
+	request := slicecontroller.NewControlRequest(slicecontroller.VerbClose, slicecontroller.ClosePayload{SourceID: focused.SourceID, FocusRequired: true})
 	if response, callErr := slicecontroller.CallControl(ctx, store.SocketPath(), *timeout, request); callErr == nil && response.Outcome.Status == "ok" {
 		_ = json.NewEncoder(stdout).Encode(response)
 		return 0
@@ -2740,7 +2780,7 @@ func printHelp(w io.Writer) {
 	writeln(w, "  restore   Restore from history")
 	writeln(w, "  history   Inspect timeline")
 	writeln(w, "  mirror    Snapshot, discover, and mirror live terminal sessions")
-	writeln(w, "  slice     Versioned authoritative live-source inventory")
+	writeln(w, "  slice     Continuously project and manage live host terminals")
 	writeln(w, "  prune     Prune old events/checkpoints/snapshots")
 	writeln(w, "  bottle    Bottle workflows (V2)")
 	writeln(w, "  doctor    Read-only capture/resume diagnostics")
@@ -2764,7 +2804,7 @@ func warnLocalInstall(stderr io.Writer) {
 		return
 	}
 	if _, err := os.Stat(p); err == nil {
-		_, _ = fmt.Fprintf(stderr, "warning: %s exists and may shadow the Nix-managed version; run `devbox run uninstall-local` to remove it\n", p)
+		_, _ = fmt.Fprintf(stderr, "warning: %s exists and may shadow the Nix-managed version; run `devenv shell uninstall-local` to remove it\n", p)
 	}
 }
 

@@ -47,6 +47,7 @@ packages=(
   ./internal/slicerpc
   ./internal/slicelayout
   ./internal/slicecontroller
+  ./internal/slicetui
   ./internal/slicelaunch
   ./internal/hostleechsoak
   ./internal/mirror

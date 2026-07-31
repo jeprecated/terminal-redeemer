@@ -8,7 +8,7 @@
 
 When this ADR was proposed, Terminal Redeemer had an explicit, one-shot live-mirror workflow and a separate prior-boot resume workflow, but neither defined the continuous selection, ownership, recovery, or spatial semantics required to project selected live host terminals onto another machine safely. The common domain contract below preceded the protocol, persistence, controller, and routed-launch implementation.
 
-This ADR originated as the contract rather than a claim about the legacy mirror implementation. The final v1 amendments below now describe the opt-in controller, revisioned protocol, routed launch implementation, and host-authoritative spatial convergence.
+This ADR originated as the contract rather than a claim about the legacy mirror implementation. The final v1 amendments below now describe the opt-in controller, revisioned protocol, routed launch implementation, and host-authoritative spatial convergence. [ADR 0005](0005-global-slice-selection-and-live-management.md) adds the v1.1 global inclusion reason and live manager without changing ownership or attachment semantics.
 
 ## Decision drivers
 
@@ -45,19 +45,20 @@ A missing, dead-but-resurrectable, ambiguous, duplicated, incompatible, or other
 
 The **share** is the discoverable set of all eligible sources. “Share” means eligibility and discoverability; it does not mean screen sharing, publication, ownership transfer, or a complete authorization design.
 
-The **live slice** is the derived desired set of eligible source identities and their projection intents. It is not the set of already-existing projection windows. An eligible source is desired when its case-normalized static workspace name is selected **or** it has an exact per-source **pickup** inclusion, unless a manual **close** exclusion keyed by that source's exact verified Zellij session identity removes it:
+The **live slice** is the derived desired set of eligible source identities and their projection intents. It is not the set of already-existing projection windows. In v1.1, an eligible source is desired when global all-eligible selection is active, its case-normalized static workspace name is selected, **or** it has an exact per-source **pickup** inclusion, unless a manual **close** exclusion keyed by that source's exact verified Zellij session identity removes it:
 
 ```text
-(selected static workspace OR pickup inclusion) AND NOT close exclusion
+(all eligible OR selected static workspace OR pickup inclusion) AND NOT close exclusion
 ```
 
 A live slice is initially a computed policy and result, not a required named, persisted, or reusable collection. Detailed persistence and conflict rules remain for later decisions.
 
 The selection actions are:
 
-- **Pickup:** explicitly include an eligible source outside the selected workspaces.
-- **Close** (sometimes described as “drop”): detach and remove only the local projection and retain a `closed_by_user` exclusion for that exact verified Zellij session. It survives source replacement and source epochs while that session remains live. It does not remove a source from the share or erase its underlying workspace/pickup selection.
-- **Reopen:** resolve a current source to its verified session and clear that session’s manual-close exclusion so its underlying selected-workspace or pickup reason can resume requesting projection. Reopen is not a second inclusion reason. It requests exact live attachment only when that source is still eligible and still selected by workspace or pickup; it never means Zellij resurrection.
+- **All eligible:** include every current and future eligible source, including sources on unnamed host workspaces. It controls projection desire only and does not broaden routed-launch workspace selection.
+- **Pickup:** explicitly include an eligible source outside the selected workspaces. Pickup removal removes only that exact positive reason.
+- **Close** (sometimes described as “drop”): detach and remove only the local projection and retain a `closed_by_user` exclusion for that exact verified Zellij session. It survives source replacement and source epochs while that session remains live. It does not remove a source from the share or erase its underlying global/workspace/pickup selection.
+- **Reopen:** resolve a current source to its verified session and clear that session’s manual-close exclusion so its underlying global, selected-workspace, or pickup reason can resume requesting projection. Reopen is not a second inclusion reason. It requests exact live attachment only when that source is still eligible and still selected by global, workspace, or pickup policy; it never means Zellij resurrection.
 - **Undo:** reverse the most recent eligible local slice-selection action, such as close to reopen or pickup to removal of that override. Undo never reverses a host window, process, or session effect. The original decision deferred history depth, retention, persistence format, and command shape; the v1 controller implements bounded choices without making them part of this domain ADR.
 
 ### 3. Projection ownership and exact interactive attachment

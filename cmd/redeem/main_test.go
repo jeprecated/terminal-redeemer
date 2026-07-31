@@ -25,6 +25,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/sliceenv"
 	"github.com/jmo/terminal-redeemer/internal/sliceprotocol"
 	"github.com/jmo/terminal-redeemer/internal/slicerpc"
+	"github.com/jmo/terminal-redeemer/internal/slicetui"
 )
 
 func TestHelpByDefault(t *testing.T) {
@@ -37,11 +38,50 @@ func TestHelpByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	if !strings.Contains(out.String(), "redeem - terminal session history and restore") {
-		t.Fatalf("expected help output, got %q", out.String())
+	if !strings.Contains(out.String(), "redeem - terminal session history and restore") || !strings.Contains(out.String(), "Continuously project and manage live host terminals") {
+		t.Fatalf("expected discoverable slice help output, got %q", out.String())
 	}
 	if stderrWithoutWarning(errBuf.String()) != "" {
 		t.Fatalf("expected empty stderr (ignoring local-install warning), got %q", errBuf.String())
+	}
+}
+
+func TestSliceManageDispatchAndValidation(t *testing.T) {
+	root := t.TempDir()
+	original := runSliceManageUI
+	defer func() { runSliceManageUI = original }()
+
+	called := false
+	runSliceManageUI = func(client slicetui.Client, refresh, timeout time.Duration) error {
+		called = true
+		socket, ok := client.(slicetui.SocketClient)
+		if !ok || !strings.HasSuffix(socket.Path, "/slice/controller/control.sock") || socket.Timeout != 2*time.Second {
+			t.Fatalf("client=%#v", client)
+		}
+		if refresh != 3*time.Second || timeout != 2*time.Second {
+			t.Fatalf("refresh=%s timeout=%s", refresh, timeout)
+		}
+		return nil
+	}
+	var out, stderr bytes.Buffer
+	code := run([]string{"slice", "manage", "--state-dir", root, "--timeout", "2s", "--refresh-interval", "3s"}, &out, &stderr)
+	if code != 0 || !called {
+		t.Fatalf("code=%d called=%t stderr=%s", code, called, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "slice")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("slice manage created controller state directories: %v", err)
+	}
+
+	called = false
+	stderr.Reset()
+	if code = run([]string{"slice", "manage", "--state-dir", root, "--refresh-interval", "0s"}, &out, &stderr); code != 2 || called || !strings.Contains(stderr.String(), "requires positive") {
+		t.Fatalf("invalid code=%d called=%t stderr=%s", code, called, stderr.String())
+	}
+
+	runSliceManageUI = func(slicetui.Client, time.Duration, time.Duration) error { return errors.New("tui failed") }
+	stderr.Reset()
+	if code = run([]string{"slice", "manage", "--state-dir", root}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "tui failed") {
+		t.Fatalf("failure code=%d stderr=%s", code, stderr.String())
 	}
 }
 
@@ -79,6 +119,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
 		{name: "slice inventory init", args: []string{"slice", "inventory", "init", "--help"}},
 		{name: "slice inventory snapshot", args: []string{"slice", "inventory", "snapshot", "--help"}},
+		{name: "slice manage", args: []string{"slice", "manage", "--help"}},
 		{name: "restore apply", args: []string{"restore", "apply", "--help"}},
 		{name: "restore tui", args: []string{"restore", "tui", "--help"}},
 		{name: "resume", args: []string{"resume", "--help"}},
@@ -1315,6 +1356,14 @@ func TestSliceControllerCLIInitControlAndDisabledDefault(t *testing.T) {
 		t.Fatalf("state=%#v err=%v", state, err)
 	}
 	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Second, RetryInitialBackoff: time.Millisecond, RetryMaxBackoff: time.Millisecond, RetryMaxAttempts: 1, SourceGoneGrace: time.Second, SourceGoneConfirmations: 2}}
+	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	now := time.Now().UTC()
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1, Name: "work", Key: "work"}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	if _, _, _, err := engine.ApplyEnvelope(envelope, now); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -1336,12 +1385,93 @@ func TestSliceControllerCLIInitControlAndDisabledDefault(t *testing.T) {
 	if code := run([]string{"slice", "controller", "status", "--state-dir", root}, &out, &stderr); code != 0 || !strings.Contains(out.String(), "controller_id") {
 		t.Fatalf("status code=%d out=%s stderr=%s", code, out.String(), stderr.String())
 	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "all-enable", "--state-dir", root}, &out, &stderr); code != 0 {
+		t.Fatalf("all-enable code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	var controlResponse slicecontroller.ControlResponse
+	if err := json.Unmarshal(out.Bytes(), &controlResponse); err != nil || controlResponse.State == nil || !controlResponse.State.AllEligible {
+		t.Fatalf("all-enable response=%s err=%v", out.String(), err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "all-disable", "--state-dir", root}, &out, &stderr); code != 0 {
+		t.Fatalf("all-disable code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	controlResponse = slicecontroller.ControlResponse{}
+	if err := json.Unmarshal(out.Bytes(), &controlResponse); err != nil || controlResponse.State == nil || controlResponse.State.AllEligible {
+		t.Fatalf("all-disable response=%s err=%v", out.String(), err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "pickup", "--source-id", sourceID, "--state-dir", root}, &out, &stderr); code != 0 {
+		t.Fatalf("pickup code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	controlResponse = slicecontroller.ControlResponse{}
+	if err := json.Unmarshal(out.Bytes(), &controlResponse); err != nil || controlResponse.State == nil || !controlResponse.State.Pickups[sourceID] {
+		t.Fatalf("pickup response=%s err=%v", out.String(), err)
+	}
+	out.Reset()
+	stderr.Reset()
+	if code := run([]string{"slice", "controller", "pickup-remove", "--source-id", sourceID, "--state-dir", root}, &out, &stderr); code != 0 {
+		t.Fatalf("pickup-remove code=%d out=%s stderr=%s", code, out.String(), stderr.String())
+	}
+	controlResponse = slicecontroller.ControlResponse{}
+	if err := json.Unmarshal(out.Bytes(), &controlResponse); err != nil || controlResponse.State == nil || controlResponse.State.Pickups[sourceID] {
+		t.Fatalf("pickup-remove response=%s err=%v", out.String(), err)
+	}
 	cancel()
 	<-done
 	out.Reset()
 	stderr.Reset()
 	if code := run([]string{"slice", "controller", "init", "--state-dir", root, "--host-id", "host-a", "--leech-id", "leech-a"}, &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "already initialized") {
 		t.Fatalf("reinit code=%d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestControllerSpatialSkipsUnnamedSourcesWithoutStateChurn(t *testing.T) {
+	root := t.TempDir()
+	store, err := slicecontroller.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Initialize(slicecontroller.Namespace{Host: "host", Leech: "leech"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	engine := &slicecontroller.Engine{Store: store, Config: slicecontroller.ControllerConfig{RetryWindow: time.Second, RetryInitialBackoff: time.Millisecond, RetryMaxBackoff: time.Millisecond, RetryMaxAttempts: 1}, Now: func() time.Time { return now }}
+	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const sessionID = "ses_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	source := sliceprotocol.Source{SourceID: sourceID, RuntimeWindowID: 42, Session: sliceprotocol.Session{ID: sessionID, Name: "session-a", Status: "active"}, Workspace: sliceprotocol.Workspace{RuntimeID: 1}, Output: sliceprotocol.Output{Name: "DP-1", LogicalWidth: 1920, LogicalHeight: 1080, Scale: 1, Transform: "normal"}, Layout: sliceprotocol.Layout{Mode: "tiled", Position: &sliceprotocol.Position{Column: 1, Tile: 1}, TileWidth: 960, TileHeight: 540, WindowWidth: 960, WindowHeight: 540}}
+	envelope := sliceprotocol.Envelope{SchemaVersion: 1, SourceHostID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Observation: sliceprotocol.Observation{Quality: sliceprotocol.QualityComplete, AttemptedAt: now}, Authoritative: &sliceprotocol.Authoritative{SourceEpoch: "11111111-1111-4111-8111-111111111111", Revision: 1, ObservedAt: now, WorkspaceNormalization: sliceprotocol.WorkspaceNormalization, LiveSessionIDs: []string{sessionID}, Sources: []sliceprotocol.Source{source}, Conflicts: []sliceprotocol.Conflict{}}}
+	if _, _, _, err = engine.ApplyEnvelope(envelope, now); err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := engine.SelectAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := state.Projections[sourceID]
+	workspaceName, outputName := "local", "DP-1"
+	workspaceID := uint64(7)
+	local := niriipc.State{Outputs: map[string]niriipc.Output{outputName: {Name: outputName, Logical: niriipc.Logical{Width: 1920, Height: 1080, Scale: 1, Transform: "normal"}}}, Workspaces: []niriipc.Workspace{{ID: workspaceID, Name: &workspaceName, Output: &outputName}}, Windows: []niriipc.Window{{ID: 9, AppID: projection.AppID, PID: 123, WorkspaceID: &workspaceID, Layout: niriipc.Layout{Position: []int{1, 1}, WindowSize: []int{960, 540}}}}}
+	beforeGeneration := state.Generation
+	executions := 0
+	planControllerSpatial(context.Background(), engine, config.Defaults(), local, "leech-epoch", []slicecontroller.OwnedWindow{{SourceID: sourceID, WindowID: 9, PID: 123, AppID: projection.AppID}}, func(context.Context, []slicecontroller.Effect) error {
+		executions++
+		return nil
+	})
+	state, err = engine.Status()
+	if err != nil || state.Generation != beforeGeneration || executions != 0 {
+		t.Fatalf("unnamed spatial churn generation=%d want=%d executions=%d err=%v", state.Generation, beforeGeneration, executions, err)
+	}
+	if _, ok := state.Spatial[sourceID]; ok {
+		t.Fatalf("unnamed source retained spatial authority: %+v", state.Spatial[sourceID])
+	}
+	selected, err := (launchSelection{stateDir: root}).Selected("work")
+	if err != nil || selected {
+		t.Fatalf("all-eligible changed routed launch selection: selected=%t err=%v", selected, err)
 	}
 }
 
@@ -1422,7 +1552,11 @@ func closeEffectNiriServer(t *testing.T, windows []niriipc.Window) (string, func
 
 func closeEffectHarness(t *testing.T) (*slicecontroller.Engine, string, []string) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := os.MkdirTemp("/tmp", "tr-close-store-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	store, err := slicecontroller.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1562,6 +1696,123 @@ func TestExecuteSliceControllerCloseDropEffectsRequireExactOwnershipAndStayLocal
 			}
 			if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 				t.Fatalf("close/drop invoked transport/RPC/Zellij command: %v", err)
+			}
+		})
+	}
+}
+
+func TestFocusedCloseControlSocketReprovesFocusBeforeMutation(t *testing.T) {
+	const sourceID = "src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, tc := range []struct {
+		name          string
+		focusedAtExec bool
+		injectFailure bool
+	}{
+		{name: "focus changed", focusedAtExec: false},
+		{name: "non-focus effect failure", focusedAtExec: true, injectFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, executable, argv := closeEffectHarness(t)
+			initialState, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			initialSource := initialState.Sources[sourceID]
+			initialMapping := initialState.Projections[sourceID]
+			initialUndo := append([]slicecontroller.UndoAction(nil), initialState.Undo...)
+			processes := closeEffectProcessReader{exe: executable, argv: argv}
+			initialWindows := []niriipc.Window{{ID: 9, AppID: initialMapping.AppID, PID: 123, IsFocused: true, WorkspaceID: ptrUint64(1), Layout: niriipc.Layout{Position: []int{1, 1}, TileSize: []float64{960, 540}, WindowSize: []int{960, 540}}}}
+			initial := slicecontroller.VerifyOwnedWindows(initialState, niriipc.State{Windows: initialWindows}, processes)
+			if len(initial) != 1 || !initial[0].Focused {
+				t.Fatalf("initial focused ownership proof=%+v", initial)
+			}
+
+			// Model the destructive boundary after close-focused's initial proof.
+			effectWindows := append([]niriipc.Window(nil), initialWindows...)
+			effectWindows[0].IsFocused = tc.focusedAtExec
+			niriSocket, requests := closeEffectNiriServer(t, effectWindows)
+			cfg := config.Defaults()
+			resolver := sliceenv.Resolver{Keys: []string{"NIRI_SOCKET", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"}, Environment: []string{"NIRI_SOCKET=" + niriSocket, "WAYLAND_DISPLAY=wayland-test", "XDG_RUNTIME_DIR=/tmp"}}
+			focusEffect := make(chan bool, 1)
+			rawExecute := func(ctx context.Context, effects []slicecontroller.Effect) error {
+				for _, effect := range effects {
+					if effect.Kind == slicecontroller.EffectCloseProjection {
+						focusEffect <- effect.FocusRequired
+					}
+				}
+				if tc.injectFailure {
+					if _, err := engine.RecordObservationFailure("injected_effect_failure"); err != nil {
+						return err
+					}
+					return errors.New("injected close effect failure")
+				}
+				return executeSliceControllerEffectsWithProcesses(ctx, engine, cfg, resolver, effects, processes)
+			}
+			operationMu := &sync.Mutex{}
+			handler := slicecontroller.ControlHandler{Engine: engine, Serialize: operationMu, Execute: func(ctx context.Context, effects []slicecontroller.Effect) error {
+				return engine.ExecuteEffects(ctx, effects, rawExecute)
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- slicecontroller.ServeControl(ctx, engine.Store.SocketPath(), time.Second, handler) }()
+			deadline := time.Now().Add(time.Second)
+			for {
+				if _, statErr := os.Stat(engine.Store.SocketPath()); statErr == nil {
+					break
+				}
+				select {
+				case serveErr := <-done:
+					cancel()
+					t.Fatalf("control socket failed before ready: %v", serveErr)
+				default:
+				}
+				if time.Now().After(deadline) {
+					cancel()
+					t.Fatalf("control socket not ready: %s", engine.Store.SocketPath())
+				}
+				time.Sleep(time.Millisecond)
+			}
+
+			response, callErr := slicecontroller.CallControl(context.Background(), engine.Store.SocketPath(), time.Second, slicecontroller.NewControlRequest(slicecontroller.VerbClose, slicecontroller.ClosePayload{SourceID: sourceID, FocusRequired: true}))
+			cancel()
+			if serveErr := <-done; serveErr != nil {
+				t.Fatal(serveErr)
+			}
+			if callErr != nil || response.Outcome.Code != "effect_failed" {
+				t.Fatalf("focused close response=%+v err=%v", response, callErr)
+			}
+			select {
+			case required := <-focusEffect:
+				if !required {
+					t.Fatal("focused close marker was lost before effect execution")
+				}
+			default:
+				t.Fatal("focused close effect was not executed")
+			}
+
+			rolledBack, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rolledBack.ClosedByUser) != 0 || rolledBack.Sources[sourceID].Connection != initialSource.Connection || rolledBack.Projections[sourceID].Status != initialMapping.Status || rolledBack.Projections[sourceID].NiriWindowID != initialMapping.NiriWindowID || len(rolledBack.Undo) != len(initialUndo) {
+				t.Fatalf("failed focused close retained intent: closed=%+v source=%+v projection=%+v undo=%+v", rolledBack.ClosedByUser, rolledBack.Sources[sourceID], rolledBack.Projections[sourceID], rolledBack.Undo)
+			}
+			for _, undo := range rolledBack.Undo {
+				if undo.Kind == "close" && undo.SourceID == sourceID {
+					t.Fatalf("failed focused close retained undo intent: %+v", undo)
+				}
+			}
+			owned := []slicecontroller.OwnedWindow{{SourceID: sourceID, WindowID: 9, PID: 123, AppID: initialMapping.AppID, Focused: tc.focusedAtExec}}
+			if _, effects, observeErr := engine.ObserveLocal("leech-epoch", owned); observeErr != nil || len(effects) != 0 {
+				t.Fatalf("post-rollback local observation effects=%+v err=%v", effects, observeErr)
+			}
+			if _, effects, tickErr := engine.Tick(); tickErr != nil || len(effects) != 0 {
+				t.Fatalf("post-rollback reconciliation effects=%+v err=%v", effects, tickErr)
+			}
+			for _, request := range requests() {
+				if strings.Contains(request, "CloseWindow") {
+					t.Fatalf("failed focused close emitted later close mutation: %s", request)
+				}
 			}
 		})
 	}

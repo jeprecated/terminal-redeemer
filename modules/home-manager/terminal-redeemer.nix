@@ -99,8 +99,16 @@ let
   controllerExecStart = "${lib.getExe cfg.package} --config ${lib.escapeShellArg configPath} slice controller run";
   sliceLaunchCommand = [ (lib.getExe cfg.package) "slice" "launch" ];
   sliceCloseFocusedCommand = [ (lib.getExe cfg.package) "slice" "close-focused" ];
+  sliceManageCommand = [
+    cfg.slice.kittyCommand
+    "--config" "NONE"
+    "--class" "terminal-redeemer-slice-manager"
+    "--override" "confirm_os_window_close=0"
+    "--title" "Terminal Redeemer Slices"
+    "-e" cfg.slice.selfCommand "--config" configPath "slice" "manage"
+  ];
   sliceNiriIntegrationFragment = ''
-    // Terminal Redeemer host/leech consumer contract v1.0.0.
+    // Terminal Redeemer host/leech consumer contract v1.1.0.
     // Opt-in template only; this module does not install these bindings.
     binds {
         Mod+Return { spawn "${lib.getExe cfg.package}" "slice" "launch"; }
@@ -271,6 +279,7 @@ in {
       leechMode.enable = lib.mkEnableOption "explicit routed Leech terminal-launch mode (disabled by default; runtime mode can also be inspected/toggled with redeem slice mode)";
       launchCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceLaunchCommand; description = "Packaged argv suitable for a future leech Niri Super+Enter binding; this module does not install the binding."; };
       closeFocusedCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceCloseFocusedCommand; description = "Packaged argv suitable for a future leech Niri Super+W projection-close binding; this module does not install the binding."; };
+      manageCommand = lib.mkOption { type = lib.types.listOf lib.types.str; readOnly = true; default = sliceManageCommand; description = "Direct packaged Kitty argv that opens the live slice manager; consumers choose and install any binding."; };
       niriIntegrationFragment = lib.mkOption { type = lib.types.lines; readOnly = true; default = sliceNiriIntegrationFragment; description = "Generated opt-in Niri KDL fragment for Super+Enter routed launch and Super+W owned projection close; never installed automatically."; };
       sourceHost = lib.mkOption { type = lib.types.str; default = ""; description = "Operator-owned SSH destination for the additive slice RPC transport."; };
       selfCommand = lib.mkOption { type = lib.types.str; default = lib.getExe cfg.package; defaultText = lib.literalExpression "lib.getExe cfg.package"; description = "Packaged redeem executable; executed directly without a shell wrapper."; };

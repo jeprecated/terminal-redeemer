@@ -207,6 +207,7 @@ type State struct {
 	Inventory            *sliceprotocol.Authoritative  `json:"inventory,omitempty"`
 	ObservationQuality   sliceprotocol.Quality         `json:"observation_quality,omitempty"`
 	ObservationCode      string                        `json:"observation_code,omitempty"`
+	AllEligible          bool                          `json:"all_eligible,omitempty"`
 	SelectedWorkspaces   map[string]string             `json:"selected_workspaces"`
 	Pickups              map[string]bool               `json:"pickups"`
 	ClosedByUser         map[string]SessionDrop        `json:"closed_by_user"`
@@ -587,7 +588,7 @@ func (s State) Wanted(sourceID string) bool {
 		return false
 	}
 	_, dropped := s.ClosedByUser[source.SessionID]
-	return (s.Pickups[sourceID] || s.SelectedWorkspaces[source.WorkspaceKey] != "") && !dropped
+	return (s.AllEligible || s.Pickups[sourceID] || s.SelectedWorkspaces[source.WorkspaceKey] != "") && !dropped
 }
 
 func (s State) SortedSourceIDs() []string {

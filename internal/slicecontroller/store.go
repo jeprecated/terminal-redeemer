@@ -31,10 +31,19 @@ const MaxControllerStateBytes = 16 << 20
 type Store struct{ root, current, marker, lockPath, socketPath string }
 type Lock struct{ file *os.File }
 
-func NewStore(stateDir string) (*Store, error) {
+func ControlSocketPath(stateDir string) (string, error) {
 	if !filepath.IsAbs(stateDir) {
-		return nil, errors.New("controller state directory must be absolute")
+		return "", errors.New("controller state directory must be absolute")
 	}
+	return filepath.Join(filepath.Clean(stateDir), "slice", "controller", "control.sock"), nil
+}
+
+func NewStore(stateDir string) (*Store, error) {
+	socketPath, err := ControlSocketPath(stateDir)
+	if err != nil {
+		return nil, err
+	}
+	stateDir = filepath.Clean(stateDir)
 	sliceDir := filepath.Join(stateDir, "slice")
 	root := filepath.Join(sliceDir, "controller")
 	if err := ensureStateDirectory(stateDir); err != nil {
@@ -49,7 +58,7 @@ func NewStore(stateDir string) (*Store, error) {
 	if err := syncDir(root); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, current: filepath.Join(root, "current.json"), marker: filepath.Join(root, "enrolled"), lockPath: filepath.Join(root, "controller.lock"), socketPath: filepath.Join(root, "control.sock")}, nil
+	return &Store{root: root, current: filepath.Join(root, "current.json"), marker: filepath.Join(root, "enrolled"), lockPath: filepath.Join(root, "controller.lock"), socketPath: socketPath}, nil
 }
 func (s *Store) Root() string       { return s.root }
 func (s *Store) SocketPath() string { return s.socketPath }

@@ -24,7 +24,10 @@ const (
 	VerbStatus              ControlVerb = "status"
 	VerbWorkspaceAdd        ControlVerb = "workspace_add"
 	VerbWorkspaceRemove     ControlVerb = "workspace_remove"
+	VerbAllEnable           ControlVerb = "all_enable"
+	VerbAllDisable          ControlVerb = "all_disable"
 	VerbPickup              ControlVerb = "pickup"
+	VerbPickupRemove        ControlVerb = "pickup_remove"
 	VerbDrop                ControlVerb = "drop"
 	VerbClose               ControlVerb = "close"
 	VerbReopen              ControlVerb = "reopen"
@@ -57,6 +60,10 @@ type ControlResponse struct {
 type SourcePayload struct {
 	SourceID string `json:"source_id"`
 }
+type ClosePayload struct {
+	SourceID      string `json:"source_id"`
+	FocusRequired bool   `json:"focus_required,omitempty"`
+}
 type WorkspacePayload struct {
 	Name string `json:"name"`
 }
@@ -82,6 +89,7 @@ func (h ControlHandler) Handle(ctx context.Context, request ControlRequest) Cont
 	}
 	var state State
 	var effects []Effect
+	var focusedRollback *FocusedCloseRollback
 	var err error
 	switch request.Verb {
 	case VerbStatus:
@@ -96,7 +104,13 @@ func (h ControlHandler) Handle(ctx context.Context, request ControlRequest) Cont
 		if err == nil {
 			state, effects, err = h.Engine.SelectWorkspace(p.Name, request.Verb == VerbWorkspaceAdd)
 		}
-	case VerbPickup, VerbDrop, VerbClose, VerbReopen, VerbReconnect:
+	case VerbAllEnable, VerbAllDisable:
+		var p struct{}
+		err = decodeControlPayload(request.Payload, &p)
+		if err == nil {
+			state, effects, err = h.Engine.SelectAll(request.Verb == VerbAllEnable)
+		}
+	case VerbPickup, VerbPickupRemove, VerbDrop, VerbReopen, VerbReconnect:
 		var p SourcePayload
 		err = decodeControlPayload(request.Payload, &p)
 		if err == nil && !safeName(p.SourceID) {
@@ -104,14 +118,31 @@ func (h ControlHandler) Handle(ctx context.Context, request ControlRequest) Cont
 		}
 		if err == nil {
 			switch request.Verb {
-			case VerbPickup:
-				state, effects, err = h.Engine.Pickup(p.SourceID, true)
-			case VerbDrop, VerbClose:
+			case VerbPickup, VerbPickupRemove:
+				state, effects, err = h.Engine.Pickup(p.SourceID, request.Verb == VerbPickup)
+			case VerbDrop:
 				state, effects, err = h.Engine.Close(p.SourceID)
 			case VerbReopen:
 				state, effects, err = h.Engine.Reopen(p.SourceID)
 			case VerbReconnect:
 				state, effects, err = h.Engine.Reconnect(p.SourceID)
+			}
+		}
+	case VerbClose:
+		var p ClosePayload
+		err = decodeControlPayload(request.Payload, &p)
+		if err == nil && !safeName(p.SourceID) {
+			err = errors.New("invalid source")
+		}
+		if err == nil {
+			if p.FocusRequired {
+				if h.Serialize == nil {
+					err = errors.New("focused close requires serialized control execution")
+				} else {
+					state, effects, focusedRollback, err = h.Engine.CloseFocused(p.SourceID)
+				}
+			} else {
+				state, effects, err = h.Engine.Close(p.SourceID)
 			}
 		}
 	case VerbUndo:
@@ -161,8 +192,19 @@ func (h ControlHandler) Handle(ctx context.Context, request ControlRequest) Cont
 	if err != nil {
 		return fail("request_failed")
 	}
+	if focusedRollback != nil && h.Execute == nil {
+		if _, rollbackErr := h.Engine.RollbackFocusedClose(focusedRollback); rollbackErr != nil {
+			return fail("focused_close_rollback_failed")
+		}
+		return fail("effect_failed")
+	}
 	if len(effects) > 0 && h.Execute != nil {
 		if err = h.Execute(ctx, effects); err != nil {
+			if focusedRollback != nil {
+				if _, rollbackErr := h.Engine.RollbackFocusedClose(focusedRollback); rollbackErr != nil {
+					return fail("focused_close_rollback_failed")
+				}
+			}
 			return fail("effect_failed")
 		}
 	}

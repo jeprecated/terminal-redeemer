@@ -5,9 +5,9 @@
 ## Product model
 
 - **Restore dead sessions:** query complete Niri and terminal state on every capture, append history only when restore-relevant normalized state changes (not volatile window titles), and recreate local applications and Zellij terminals. A crash-durable rolling checkpoint per boot tracks the latest successful observation; restore preserves the captured terminal CWD.
-- **Mirror live sessions:** obtain another host's `redeem mirror snapshot` over SSH, discover its live Kitty/Zellij windows, and open local Kitty windows attached to or watching those remote sessions.
+- **Project live sessions:** the opt-in `slice` controller continuously projects selected eligible host Kitty/live-Zellij terminals; the legacy `mirror` commands remain one-shot interactive attachment.
 
-Mirroring is an explicit CLI action, not a continuous synchronization daemon. Host names are configuration values; no host identity is built in.
+Legacy mirroring is an explicit CLI action, not a continuous synchronization daemon. Host names are configuration values; no host identity is built in.
 
 ## Quick start
 
@@ -28,7 +28,25 @@ Home Manager exposes `programs.terminal-redeemer.restore.onStartup`, defaulting 
 
 See [docs/OPERATIONS.md](docs/OPERATIONS.md) for operations and the [host/leech readiness and consumer contract](docs/HOST_LEECH_READINESS.md) for deployment order, rollback invariants, the generated Niri binding template, and the operator smoke gate.
 
-## Live mirroring
+## Continuous terminal slices
+
+The slice controller and routed Leech mode are separate opt-ins and remain disabled by default. After the host inventory and leech controller are enrolled, manage current policy from a terminal:
+
+```bash
+redeem slice manage
+redeem slice controller workspace-add --workspace Work  # current/future eligible terminals in Work
+redeem slice controller all-enable                       # all current/future eligible host terminals
+redeem slice controller pickup --source-id src_...      # exact-source inclusion
+redeem slice controller pickup-remove --source-id src_...
+redeem slice controller close --source-id src_...       # local projection only; host work survives
+redeem slice controller reopen --source-id src_...
+```
+
+All-eligible is an additive projection reason: it includes named and unnamed host workspaces but does not broaden routed Super+Enter, which still requires an explicitly selected named workspace and separate Leech mode. Unnamed sources attach without cross-machine spatial placement and appear under `(unnamed)` in the manager.
+
+`redeem slice close-focused` is the ownership-checked command for a consumer keybinding. Home Manager also exports `slice.manageCommand`, direct Kitty argv for opening the live manager; consumers choose any binding and the module installs none. See [docs/OPERATIONS.md](docs/OPERATIONS.md) before enabling the controller or routed launch mode.
+
+## Legacy one-shot mirroring
 
 Configure `mirror.sourceHost`, or pass `--host`:
 
@@ -71,7 +89,7 @@ Current live-mirror constraints:
 - source host: `redeem mirror snapshot` available through SSH
 - legacy mirror remains one-shot; the separate slice controller is opt-in and disabled by default
 
-Architecture decisions: [prior-boot resume](docs/adr/0001-resume-zellij-terminals-in-niri.md), [host-leech terminal slices](docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md), controller [workspace sharing and persistence semantics](docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md), and the [single-monitor Niri spatial mapping policy](docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md).
+Architecture decisions: [prior-boot resume](docs/adr/0001-resume-zellij-terminals-in-niri.md), [host-leech terminal slices](docs/adr/0002-host-leech-terminal-slice-domain-and-lifecycle.md), controller [workspace sharing and persistence semantics](docs/adr/0003-terminal-slice-workspace-sharing-and-persistence.md), the [single-monitor Niri spatial mapping policy](docs/adr/0004-single-monitor-niri-spatial-mapping-policy.md), and [global selection with live management](docs/adr/0005-global-slice-selection-and-live-management.md).
 
 The additive [live source inventory, RPC, and controller protocol](docs/PROTOCOL.md) provides explicit initialization, revisioned complete/degraded snapshots, bounded typed RPC, crash-safe launch tokens, exact live-only attachment, an opt-in foreground reconciler, and disabled-by-default routed Leech launches. `redeem slice launch` routes selected static workspaces to exactly one host Kitty/Zellij transaction and never falls back locally after remote intent; the host owns execution/work and the leech window is only a projection. The module exports packaged launch argv but installs no consumer keybinding. These surfaces do not replace the legacy one-shot mirror JSON contract.
 
@@ -86,9 +104,10 @@ redeem resume [--dry-run]
 redeem slice inventory init|snapshot
 redeem slice rpc
 redeem slice attach --session NAME --token TOKEN
-redeem slice controller init|run|status|workspace-add|workspace-remove|pickup|drop|close|reopen|undo|reconnect
+redeem slice controller init|run|status|workspace-add|workspace-remove|all-enable|all-disable|pickup|pickup-remove|drop|close|reopen|undo|reconnect
 redeem slice mode enable|disable|status
 redeem slice launch [--reconnect-token TOKEN]
+redeem slice manage
 redeem slice close-focused
 redeem restore apply|tui
 redeem prune run

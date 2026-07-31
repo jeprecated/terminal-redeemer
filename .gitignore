@@ -1,5 +1,7 @@
+.devenv*
+devenv.local.nix
+devenv.local.yaml
 .direnv/
-devbox.lock
 result
 bin/
 coverage.out

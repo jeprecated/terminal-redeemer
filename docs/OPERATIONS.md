@@ -101,29 +101,35 @@ redeem slice controller init --host-id host --leech-id leech
 redeem slice controller run --allow-disabled   # foreground development smoke only
 redeem slice controller status
 redeem slice controller workspace-add --workspace Work
+redeem slice controller all-enable
+redeem slice controller all-disable
 redeem slice controller pickup --source-id src_...
+redeem slice controller pickup-remove --source-id src_...
 redeem slice controller close --source-id src_...
 redeem slice controller reopen --source-id src_...
 redeem slice controller reconnect --source-id src_...
 redeem slice controller undo
+redeem slice manage
 ```
 
 Only after the foreground smoke passes should a Home Manager consumer opt in with `programs.terminal-redeemer.slice.controller.enable = true`. The service is a foreground singleton, exits on missing/corrupt/uninitialized authority, polls bounded revisioned snapshots, and keeps its mode-0600 control socket in the private controller directory. Check `systemctl --user status terminal-redeemer-slice-controller.service` and its journal. A second controller is refused by the store lock.
 
-Workspace selection automatically includes current and future eligible sources. `pickup` is exact-source inclusion; `drop` is an alias for manual `close`; `close`/the focused-close helper resolves the source once and persists an exclusion keyed by its exact verified Zellij session ID before closing only a positively owned local projection. The drop survives source replacement and source epochs, including headless intervals while the session remains live. `reopen` through any current source for that session or applicable undo clears it early; otherwise consecutive accepted complete session absence plus committed grace expires it automatically. `reconnect` restarts only an exhausted connection budget. `redeem slice close-focused` first uses the serialized socket and falls back only when it can lock the store, reload current mapping, and re-prove the same focused Niri window after locking and again after committing close by exact app ID, PID, resolved configured Kitty executable, and byte-for-byte full command argv. Titles never count.
+Workspace selection automatically includes current and future eligible sources. `all-enable` adds every eligible current and future source—including sources on unnamed host workspaces—to projection desire without changing routed-launch workspace selection; `all-disable` removes only that global reason. Unnamed sources attach exactly but have no cross-machine workspace identity, so they receive no spatial proposal, produce no spatial conflict, and appear under `(unnamed)` in the manager. `redeem slice manage` presents these policies and independent source/projection/connection facts through the running controller's private socket. `pickup` is exact-source inclusion, and `pickup-remove` removes only that inclusion; `drop` is an alias for manual `close`; `close`/the focused-close helper resolves the source once and persists an exclusion keyed by its exact verified Zellij session ID before closing only a positively owned local projection. The drop survives source replacement and source epochs, including headless intervals while the session remains live. `reopen` through any current source for that session or applicable undo clears it early; otherwise consecutive accepted complete session absence plus committed grace expires it automatically. `reconnect` restarts only an exhausted connection budget. `redeem slice close-focused` carries a focus-required marker through the serialized socket close and freshly re-proves that the exact positively owned Niri window is still focused immediately before the local close action. Its close intent is durable before the effect, but any failed focused effect atomically rolls back only that newly created exclusion, closing mapping transition, connection change, and undo entry before serialized reconciliation resumes; an exclusion that already existed is never rolled back. It falls back only when it can lock the store, reload current mapping, and re-prove the same focused Niri window after locking and again after committing close by exact app ID, PID, resolved configured Kitty executable, and byte-for-byte full command argv. Titles never count.
 
 Projection Kitty windows run the packaged `slice projection-run` helper, which invokes packaged SSH directly and then only the host's exact live-only `slice attach` wrapper. Do not interpret SSH survival, an authentication prompt, a banner, or a stalled remote command as connection: `connected` requires the random framed readiness nonce emitted only after the exact isolated Zellij client starts and survives the bounded interactive confirmation interval, plus fresh positive local ownership. The retry deadline is absolute and persisted, so restarting the service first downgrades old `connected` state to re-observation, preserves any existing absolute budget, and creates one bounded episode only when ordinary connected state has no recovery, so local observation failure cannot leave it reconnecting indefinitely. Stable `disconnected` requires explicit reconnect. Degraded or disconnected inventory never closes work; source disappearance requires accepted complete revisions/grace. Manual projection close never terminates host Kitty/Zellij/process state.
 
 Every owned leech projection is converged to the authoritative host workspace, floating/tiled state, proportional width, and proportional height using exact-ID, non-focus, verify-after-write actions. Local divergence in those four properties is therefore reverted; order drift remains report-only. The controller has no host spatial-writeback path. Epoch replacement without continuity blocks all distinct desired, explicit-reconnect, and timed-retry launches behind proof that old owned cleanup completed; unresolved zero-successor lineage and exhausted gates remain inspectable. Controller state uses fixed caps plus deterministic exact retired-epoch and retired-token tombstones so terminal churn cannot grow the current file without bound while active gates and pending intents are never pruned. Tombstone exhaustion fails a novel transition explicitly and requires maintenance/re-enrollment; it never probabilistically rejects an unrelated value. Exact projection argv and transport-option counts/bytes are bounded, and an oversized marshaled state is rejected before it can replace readable current authority. The controller accepts monotonic routed-launch handoff records for one existing token. Routed creation is owned by the packaged command below; do not install a consumer Super+Enter binding until the complete readiness/rollback gate is satisfied.
 
-### Controller schema reset and re-enrolment
+### Controller schema compatibility and re-enrolment
+
+Contract v1.1 retains controller schema 2 and adds only optional omitted-false `all_eligible`. Existing schema-2 authority loads with global selection disabled. Global toggles are audited but create no undo entries. To downgrade, run `redeem slice controller all-disable` successfully while the v1.1 controller is still running, disable Leech mode, stop the controller, preserve authority, then deploy the prior package. If `all_eligible` remains true, the prior reader rejects the unknown field and its service fails closed; do not delete authority to work around that result.
 
 Old experimental controller authority is deliberately not migrated in place. On a schema mismatch:
 
 1. stop and disable `terminal-redeemer-slice-controller.service`;
 2. copy the entire owner-only `stateDir/slice/controller/` directory to a separate owner-only forensic backup and verify that backup exists and is readable;
 3. only after explicit operator approval, rename or remove **only** `stateDir/slice/controller/`;
-4. run `redeem slice controller init` to enrol fresh v1 authority;
+4. run `redeem slice controller init` to enrol fresh schema-2 authority;
 5. explicitly re-add workspace selections, pickups, and manual drops, then start the controller.
 
 Never remove source-inventory or routed-launch token state, host Kitty windows, Zellij sessions, unrelated configuration, or legacy mirror state. The backup is forensic evidence only: never overlay or merge it into the new controller directory.
@@ -138,7 +144,14 @@ redeem slice mode enable
 redeem slice mode disable
 ```
 
-The module exports the shell-inert argv `programs.terminal-redeemer.slice.launchCommand = [ <store-redeem> "slice" "launch" ]` for a consumer-owned Niri Super+Enter binding; the module never installs the binding automatically. When mode is disabled or the exact current static workspace is not selected, `redeem slice launch` directly starts the configured packaged Kitty with empty argv, matching the ordinary local launcher. That decision is completed before any token or remote intent exists.
+The module exports the shell-inert argv `programs.terminal-redeemer.slice.launchCommand = [ <store-redeem> "slice" "launch" ]` for a consumer-owned Niri Super+Enter binding. It also exports `programs.terminal-redeemer.slice.manageCommand`, exact packaged Kitty argv ending in `<store-redeem> --config <generated-config> slice manage`. A consumer may expand that list into a Niri `spawn` under any locally chosen unused key; for example, after substituting its evaluated store/config paths:
+
+```kdl
+// Consumer-owned example only: Mod+Shift+R is not reserved by the contract.
+Mod+Shift+R { spawn "/nix/store/…-kitty/bin/kitty" "--config" "NONE" "--class" "terminal-redeemer-slice-manager" "--override" "confirm_os_window_close=0" "--title" "Terminal Redeemer Slices" "-e" "/nix/store/…-terminal-redeemer/bin/redeem" "--config" "/home/USER/.config/terminal-redeemer/config.yaml" "slice" "manage"; }
+```
+
+The module never installs this example or any management binding, and the generated Mod+Return/Mod+W fragment is unchanged. When mode is disabled or the exact current static workspace is not selected, `redeem slice launch` directly starts the configured packaged Kitty with empty argv, matching the ordinary local launcher. That decision is completed before any token or remote intent exists.
 
 On a selected workspace with mode enabled, `redeem slice launch` persists one token/session intent before SSH, creates or resumes exactly one host transaction, and hands a committed source identity to the running controller. Lost responses stay on that token. Exhaustion is durable and visible; continue explicitly with:
 

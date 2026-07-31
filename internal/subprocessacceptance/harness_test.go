@@ -1403,6 +1403,36 @@ func TestHermeticTwoNodePackagedSubprocessLifecycle(t *testing.T) {
 		t.Fatalf("expected committed and cancelled routed intents, got %v", intentFiles)
 	}
 
+	// Global selection crosses the packaged control boundary, composes with the
+	// existing workspace reason, and survives controller restart without a
+	// duplicate projection. Re-add the workspace before disabling global
+	// selection so the same exact projection remains wanted throughout.
+	runOK(t, redeem, leech.config, leechEnv, "slice", "controller", "all-enable", "--state-dir", leech.state)
+	runOK(t, redeem, leech.config, leechEnv, "slice", "controller", "workspace-remove", "--state-dir", leech.state, "--workspace", "Work")
+	allSelected := waitControllerState(t, redeem, leech.config, leechEnv, leech.state, func(state slicecontroller.State) bool {
+		projection, projected := state.Projections[sourceID]
+		return state.AllEligible && state.SelectedWorkspaces["work"] == "" && projected && projection.Status == slicecontroller.ProjectionOwned && state.Sources[sourceID].Connection == slicecontroller.ConnectionConnected
+	}, "all-eligible remains the sole desired reason without duplicating the projection")
+	allPID := allSelected.Projections[sourceID].ExpectedPID
+	stopProcess(controller)
+	controller = startController(t, redeem, leech.config, leechEnv, leech.state)
+	allRestarted := waitControllerState(t, redeem, leech.config, leechEnv, leech.state, func(state slicecontroller.State) bool {
+		projection, projected := state.Projections[sourceID]
+		return state.AllEligible && projected && projection.ExpectedPID == allPID && projection.Status == slicecontroller.ProjectionOwned && state.Sources[sourceID].Connection == slicecontroller.ConnectionConnected
+	}, "all-eligible and one exact projection survive controller restart")
+	if len(allRestarted.Projections) != 1 || !processTreeContains(hostKittyPID, "zellij") {
+		t.Fatalf("all-eligible restart duplicated projection or harmed host work: projections=%#v", allRestarted.Projections)
+	}
+	runOK(t, redeem, leech.config, leechEnv, "slice", "controller", "workspace-add", "--state-dir", leech.state, "--workspace", "Work")
+	runOK(t, redeem, leech.config, leechEnv, "slice", "controller", "all-disable", "--state-dir", leech.state)
+	allDisabled := waitControllerState(t, redeem, leech.config, leechEnv, leech.state, func(state slicecontroller.State) bool {
+		projection, projected := state.Projections[sourceID]
+		return !state.AllEligible && state.SelectedWorkspaces["work"] == "Work" && projected && projection.ExpectedPID == allPID && state.Sources[sourceID].Connection == slicecontroller.ConnectionConnected
+	}, "workspace selection preserves one exact projection after all-disable")
+	if len(allDisabled.Projections) != 1 {
+		t.Fatalf("additive all-disable changed exact projection cardinality: %#v", allDisabled.Projections)
+	}
+
 	// The controller lock is a runtime singleton, not merely an init guard.
 	runFailContains(t, redeem, leech.config, leechEnv, "slice controller is already running", "slice", "controller", "run", "--state-dir", leech.state)
 

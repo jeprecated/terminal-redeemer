@@ -441,6 +441,147 @@ func TestDynamicSelectionPickupMoveDropAndRemovalMatrix(t *testing.T) {
 	}
 }
 
+func TestAllEligibleSelectionComposesWithWorkspacePickupAndClose(t *testing.T) {
+	now := time.Date(2026, 7, 25, 13, 30, 0, 0, time.UTC)
+	engine, _ := newEngine(t, &now)
+	epoch := "11111111-1111-4111-8111-111111111111"
+	named := testSource(sourceA, sessionA, "named", "Work")
+	unnamed := testSource(sourceB, sessionB, "unnamed", "")
+	unnamed.RuntimeWindowID = 43
+	if _, _, _, err := engine.ApplyEnvelope(envelope(epoch, 1, []sliceprotocol.Source{named, unnamed}, now), now); err != nil {
+		t.Fatal(err)
+	}
+
+	state, effects, err := engine.SelectAll(true)
+	if err != nil || !state.AllEligible || len(effects) != 2 || len(state.Undo) != 0 {
+		t.Fatalf("enable all state=%+v effects=%+v err=%v", state, effects, err)
+	}
+	encoded, _ := json.Marshal(state)
+	if !bytes.Contains(encoded, []byte(`"all_eligible":true`)) {
+		t.Fatalf("enabled all state omitted authority: %s", encoded)
+	}
+	generation := state.Generation
+	if state, effects, err = engine.SelectAll(true); err != nil || len(effects) != 0 || state.Generation != generation {
+		t.Fatalf("duplicate enable changed state generation=%d effects=%+v err=%v", state.Generation, effects, err)
+	}
+
+	state, effects, err = engine.Close(sourceB)
+	if err != nil || state.Wanted(sourceB) || len(effects) != 1 || effects[0].Kind != EffectCloseProjection {
+		t.Fatalf("close under all state=%+v effects=%+v err=%v", state.ClosedByUser, effects, err)
+	}
+
+	const sourceC = "src_ccccccccccccccccccccccccccccccccccccccccccc"
+	const sessionC = "ses_ccccccccccccccccccccccccccccccccccccccccccc"
+	future := testSource(sourceC, sessionC, "future", "Other")
+	future.RuntimeWindowID = 44
+	now = now.Add(time.Second)
+	state, effects, _, err = engine.ApplyEnvelope(envelope(epoch, 2, []sliceprotocol.Source{named, unnamed, future}, now), now)
+	if err != nil || len(effects) != 1 || effects[0].Kind != EffectLaunchProjection || effects[0].SourceID != sourceC {
+		t.Fatalf("future all source state=%+v effects=%+v err=%v", state.Sources[sourceC], effects, err)
+	}
+	if _, _, err = engine.SelectWorkspace("Work", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = engine.Pickup(sourceC, true); err != nil {
+		t.Fatal(err)
+	}
+	state, effects, err = engine.SelectAll(false)
+	if err != nil || state.AllEligible || len(effects) != 0 || !state.Wanted(sourceA) || !state.Wanted(sourceC) || state.Wanted(sourceB) {
+		t.Fatalf("disable all composition state=%+v effects=%+v err=%v", state, effects, err)
+	}
+	encoded, _ = json.Marshal(state)
+	if bytes.Contains(encoded, []byte(`"all_eligible"`)) {
+		t.Fatalf("disabled all state is not prior-reader compatible: %s", encoded)
+	}
+	if state, effects, err = engine.Pickup(sourceC, false); err != nil || state.Pickups[sourceC] || len(effects) != 1 || effects[0].SourceID != sourceC {
+		t.Fatalf("remove pickup state=%+v effects=%+v err=%v", state.Pickups, effects, err)
+	}
+	if state, effects, err = engine.SelectWorkspace("Work", false); err != nil || state.Wanted(sourceA) || len(effects) != 1 || effects[0].SourceID != sourceA {
+		t.Fatalf("remove workspace state=%+v effects=%+v err=%v", state.SelectedWorkspaces, effects, err)
+	}
+}
+
+func TestInterruptedAllEnableRecoversUnstartedFanout(t *testing.T) {
+	now := time.Date(2026, 7, 25, 13, 45, 0, 0, time.UTC)
+	engine, store := newEngine(t, &now)
+	if _, effects, err := engine.SelectAll(true); err != nil || len(effects) != 0 {
+		t.Fatalf("enable all before discovery effects=%+v err=%v", effects, err)
+	}
+	const count = 32
+	sources := make([]sliceprotocol.Source, 0, count)
+	for i := 0; i < count; i++ {
+		source := testSource(fmt.Sprintf("src_%043x", i+1), fmt.Sprintf("ses_%043x", i+1), fmt.Sprintf("session-%d", i+1), "Work")
+		source.RuntimeWindowID = uint64(100 + i)
+		sources = append(sources, source)
+	}
+	_, effects, _, err := engine.ApplyEnvelope(envelope("11111111-1111-4111-8111-111111111111", 1, sources, now), now)
+	if err != nil || len(effects) != count {
+		t.Fatalf("poll fanout effects=%d err=%v", len(effects), err)
+	}
+	err = engine.ExecuteEffects(context.Background(), effects, func(_ context.Context, effects []Effect) error {
+		first := effects[0]
+		projection := first.Projection
+		if _, err := engine.PrepareProjection(first.SourceID, "/kitty", []string{"/kitty", "--class", projection.AppID}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := engine.RecordLaunch(first.SourceID, 123, nil); err != nil {
+			t.Fatal(err)
+		}
+		return context.DeadlineExceeded
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("execute error=%v", err)
+	}
+	state, err := engine.Status()
+	if err != nil || !state.AllEligible || len(state.Projections) != 1 {
+		t.Fatalf("interrupted state projections=%d all=%t err=%v", len(state.Projections), state.AllEligible, err)
+	}
+	for _, source := range sources[1:] {
+		tracked := state.Sources[source.SourceID]
+		if tracked.Connection != ConnectionReconnecting || tracked.Recovery == nil {
+			t.Fatalf("unstarted source did not enter bounded recovery: %+v", tracked)
+		}
+	}
+
+	// Restart from the durable state without any successful local observation;
+	// the shared executor recovery must still make every unstarted source
+	// eligible for the normal bounded retry path.
+	restarted := &Engine{Store: store, Config: engine.Config, Now: func() time.Time { return now }}
+	if _, err := restarted.PrepareStartup(); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Second)
+	state, effects, err = restarted.Tick()
+	if err != nil || len(effects) != count-1 || len(state.Projections) != count {
+		t.Fatalf("restart retry convergence projections=%d effects=%d err=%v", len(state.Projections), len(effects), err)
+	}
+}
+
+func TestControlAllAndPickupRemoveUseSerializedEngineOperations(t *testing.T) {
+	now := time.Now().UTC()
+	engine, _ := newEngine(t, &now)
+	if _, _, _, err := engine.ApplyEnvelope(envelope("11111111-1111-4111-8111-111111111111", 1, []sliceprotocol.Source{testSource(sourceA, sessionA, "a", "Work")}, now), now); err != nil {
+		t.Fatal(err)
+	}
+	handler := ControlHandler{Engine: engine}
+	response := handler.Handle(context.Background(), NewControlRequest(VerbAllEnable, struct{}{}))
+	if response.Outcome.Status != "ok" || response.State == nil || !response.State.AllEligible {
+		t.Fatalf("enable all response=%+v", response)
+	}
+	response = handler.Handle(context.Background(), NewControlRequest(VerbAllDisable, struct{}{}))
+	if response.Outcome.Status != "ok" || response.State == nil || response.State.AllEligible {
+		t.Fatalf("disable all response=%+v", response)
+	}
+	response = handler.Handle(context.Background(), NewControlRequest(VerbPickup, SourcePayload{SourceID: sourceA}))
+	if response.Outcome.Status != "ok" || response.State == nil || !response.State.Pickups[sourceA] {
+		t.Fatalf("pickup response=%+v", response)
+	}
+	response = handler.Handle(context.Background(), NewControlRequest(VerbPickupRemove, SourcePayload{SourceID: sourceA}))
+	if response.Outcome.Status != "ok" || response.State == nil || response.State.Pickups[sourceA] {
+		t.Fatalf("pickup remove response=%+v", response)
+	}
+}
+
 func TestInitialProjectionEffectsFollowHostColumnTileOrder(t *testing.T) {
 	now := time.Now().UTC()
 	engine, _ := newEngine(t, &now)
@@ -1616,6 +1757,39 @@ func (f *fakeLocalNiri) Action(_ context.Context, action any) error {
 	return nil
 }
 
+func TestFocusedCloseRollbackRestoresOnlyNewIntentAndPreservesPriorExclusion(t *testing.T) {
+	now := time.Now().UTC()
+	engine, _ := newEngine(t, &now)
+	_, _, _, _ = engine.ApplyEnvelope(envelope("11111111-1111-4111-8111-111111111111", 1, []sliceprotocol.Source{testSource(sourceA, sessionA, "a", "work")}, now), now)
+	_, _, _ = engine.SelectWorkspace("work", true)
+	prepareSuccessfulLaunch(t, engine, sourceA, 22)
+	state, _, _ := engine.ObserveLocal("leech-epoch", []OwnedWindow{{SourceID: sourceA, WindowID: 9, PID: 22, AppID: stateProjectionApp(t, engine, sourceA), Focused: true}})
+	state, _ = engine.AttachmentConnected(sourceA)
+	beforeSource := state.Sources[sourceA]
+	beforeProjection := state.Projections[sourceA]
+	beforeUndo := append([]UndoAction(nil), state.Undo...)
+
+	committed, effects, token, err := engine.CloseFocused(sourceA)
+	if err != nil || token == nil || len(effects) != 1 || !effects[0].FocusRequired || committed.ClosedByUser[sessionA].SessionID != sessionA || committed.Projections[sourceA].Status != ProjectionClosing || committed.Sources[sourceA].Connection != "" || len(committed.Undo) != len(beforeUndo)+1 {
+		t.Fatalf("focused close was not durable before effect: state=%+v effects=%+v token=%+v err=%v", committed, effects, token, err)
+	}
+	rolledBack, err := engine.RollbackFocusedClose(token)
+	if err != nil || len(rolledBack.ClosedByUser) != 0 || !reflect.DeepEqual(rolledBack.Sources[sourceA], beforeSource) || !reflect.DeepEqual(rolledBack.Projections[sourceA], beforeProjection) || !reflect.DeepEqual(rolledBack.Undo, beforeUndo) {
+		t.Fatalf("focused rollback retained or changed intent: state=%+v err=%v", rolledBack, err)
+	}
+
+	prior, _, err := engine.Close(sourceA)
+	if err != nil || prior.ClosedByUser[sessionA].SessionID != sessionA {
+		t.Fatalf("generic prior close failed: state=%+v err=%v", prior, err)
+	}
+	priorGeneration := prior.Generation
+	priorUndo := append([]UndoAction(nil), prior.Undo...)
+	unchanged, effects, token, err := engine.CloseFocused(sourceA)
+	if err != nil || token != nil || len(effects) != 0 || unchanged.Generation != priorGeneration || unchanged.ClosedByUser[sessionA].SessionID != sessionA || !reflect.DeepEqual(unchanged.Undo, priorUndo) {
+		t.Fatalf("focused close altered prior exclusion: state=%+v effects=%+v token=%+v err=%v", unchanged, effects, token, err)
+	}
+}
+
 func TestFocusedFallbackReprovesAfterLockAndRejectsReusedID(t *testing.T) {
 	now := time.Now().UTC()
 	engine, store := newEngine(t, &now)
@@ -1633,6 +1807,30 @@ func TestFocusedFallbackReprovesAfterLockAndRejectsReusedID(t *testing.T) {
 	state, _ = engine.Status()
 	if _, dropped := state.ClosedByUser[sessionA]; dropped {
 		t.Fatal("failed reproof committed close")
+	}
+}
+
+func TestFocusedFallbackRollsBackWhenFocusChangesAfterCommit(t *testing.T) {
+	now := time.Now().UTC()
+	engine, store := newEngine(t, &now)
+	_, _, _, _ = engine.ApplyEnvelope(envelope("11111111-1111-4111-8111-111111111111", 1, []sliceprotocol.Source{testSource(sourceA, sessionA, "a", "work")}, now), now)
+	_, _, _ = engine.SelectWorkspace("work", true)
+	prepareSuccessfulLaunch(t, engine, sourceA, 22)
+	state, _, _ := engine.ObserveLocal("leech-epoch", []OwnedWindow{{SourceID: sourceA, WindowID: 9, PID: 22, AppID: stateProjectionApp(t, engine, sourceA), Focused: true}})
+	state, _ = engine.AttachmentConnected(sourceA)
+	mapping := state.Projections[sourceA]
+	beforeUndo := len(state.Undo)
+	focused := niriipc.State{Windows: []niriipc.Window{{ID: 9, PID: 22, AppID: mapping.AppID, IsFocused: true}}}
+	unfocused := niriipc.State{Windows: []niriipc.Window{{ID: 9, PID: 22, AppID: mapping.AppID, IsFocused: false}}}
+	client := &fakeLocalNiri{states: []niriipc.State{focused, unfocused}}
+	proc := fakeProc{exe: map[int]string{22: mapping.ExpectedKittyExecutable}, argv: map[int][]string{22: mapping.ExpectedKittyArgv}}
+	err := FocusedCloseFallback(context.Background(), store, engine.Config, client, proc, OwnedWindow{SourceID: sourceA, WindowID: 9, PID: 22, AppID: mapping.AppID, Focused: true}, time.Millisecond)
+	if err == nil || len(client.actions) != 0 {
+		t.Fatalf("post-commit focus race closed: actions=%#v err=%v", client.actions, err)
+	}
+	state, _ = engine.Status()
+	if len(state.ClosedByUser) != 0 || state.Projections[sourceA].Status != ProjectionOwned || state.Sources[sourceA].Connection != ConnectionConnected || len(state.Undo) != beforeUndo {
+		t.Fatalf("fallback focus failure retained close intent: closed=%+v projection=%+v source=%+v undo=%+v", state.ClosedByUser, state.Projections[sourceA], state.Sources[sourceA], state.Undo)
 	}
 }
 

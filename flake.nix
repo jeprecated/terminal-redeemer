@@ -38,7 +38,7 @@
           };
         };
 
-        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.0.0" { } ''
+        packages.host-leech-consumer-contract = pkgs.runCommand "terminal-redeemer-host-leech-consumer-contract-1.1.0" { } ''
           mkdir -p "$out/share/terminal-redeemer/host-leech-slices/v1"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.json"
           cp ${./contracts/host-leech-slices/v1/consumer-contract.schema.json} "$out/share/terminal-redeemer/host-leech-slices/v1/consumer-contract.schema.json"
@@ -180,6 +180,16 @@
           assert rendered.slice.leechModeEnabled;
           assert cfg.programs.terminal-redeemer.slice.launchCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "slice" "launch" ];
           assert cfg.programs.terminal-redeemer.slice.closeFocusedCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "slice" "close-focused" ];
+          assert cfg.programs.terminal-redeemer.slice.manageCommand == [
+            (pkgs.lib.getExe pkgs.kitty)
+            "--config" "NONE"
+            "--class" "terminal-redeemer-slice-manager"
+            "--override" "confirm_os_window_close=0"
+            "--title" "Terminal Redeemer Slices"
+            "-e" (pkgs.lib.getExe self.packages.${system}.terminal-redeemer)
+            "--config" "/home/test/.config/terminal-redeemer/config.yaml"
+            "slice" "manage"
+          ];
           assert builtins.match ".*Mod\\+Return.*slice.*launch.*Mod\\+W.*slice.*close-focused.*" cfg.programs.terminal-redeemer.slice.niriIntegrationFragment != null;
           assert rendered.slice.selfCommand == pkgs.lib.getExe self.packages.${system}.terminal-redeemer;
           assert rendered.slice.kittyCommand == pkgs.lib.getExe pkgs.kitty;
@@ -307,6 +317,16 @@
           assert rendered.slice.leechModeEnabled == false;
           assert cfg.programs.terminal-redeemer.slice.launchCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "slice" "launch" ];
           assert cfg.programs.terminal-redeemer.slice.closeFocusedCommand == [ (pkgs.lib.getExe self.packages.${system}.terminal-redeemer) "slice" "close-focused" ];
+          assert cfg.programs.terminal-redeemer.slice.manageCommand == [
+            (pkgs.lib.getExe pkgs.kitty)
+            "--config" "NONE"
+            "--class" "terminal-redeemer-slice-manager"
+            "--override" "confirm_os_window_close=0"
+            "--title" "Terminal Redeemer Slices"
+            "-e" (pkgs.lib.getExe self.packages.${system}.terminal-redeemer)
+            "--config" "/home/test/.config/terminal-redeemer/config.yaml"
+            "slice" "manage"
+          ];
           assert builtins.match ".*Mod\\+Return.*slice.*launch.*Mod\\+W.*slice.*close-focused.*" cfg.programs.terminal-redeemer.slice.niriIntegrationFragment != null;
           hmCfg.activationPackage;
 
@@ -332,6 +352,9 @@
           assert self.lib.sliceConsumerContract.inventorySchemaVersion == 1;
           assert self.lib.sliceConsumerContract.rpcSchemaVersion == 1;
           assert self.lib.sliceConsumerContract.controllerSchemaVersion == 2;
+          assert self.lib.sliceConsumerContract.contractVersion == "1.1.0";
+          assert self.lib.sliceConsumerContract.allEligibleIncludesUnnamed;
+          assert !self.lib.sliceConsumerContract.allEligibleRoutesLaunches;
           assert self.lib.sliceConsumerContract.authorityMode == "host_location";
           assert !self.lib.sliceConsumerContract.leechWriteAuthorized;
           assert !self.lib.sliceConsumerContract.leechModeEnabledByDefault;
@@ -365,6 +388,12 @@
           }
           reject_contract_mutation drops '.drops.survives_source_replacement = false'
           reject_contract_mutation command-argv '.commands.launch_reconnect[3] = "--fallback"'
+          reject_contract_mutation manage-command '.commands.manage[2] = "status"'
+          reject_contract_mutation controller-operations '.commands.controller_operations -= ["all-enable"]'
+          reject_contract_mutation selection-formula '.selection.formula = "selected_workspace"'
+          reject_contract_mutation selection-downgrade '.selection.downgrade_requires_disable_first = false'
+          reject_contract_mutation unnamed-spatial '.selection.unnamed_spatial_policy = "host_location"'
+          reject_contract_mutation manage-helper '.integration.manage_helper_option = "programs.terminal-redeemer.slice.launchCommand"'
           reject_contract_mutation authority '.authority.converged_properties -= ["proportional_height"]'
           reject_contract_mutation revisions '.revisions.non_authoritative_observations -= ["degraded"]'
           reject_contract_mutation limitations '.limitations.pinned_version_coupling = false'
@@ -381,8 +410,9 @@
           fi
           grep -F '${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}' "$contractOut/niri-bindings.kdl"
           redeem=${pkgs.lib.getExe self.packages.${system}.terminal-redeemer}
-          "$redeem" slice --help | grep -F 'controller|mode|launch|projection-run|close-focused'
-          "$redeem" slice controller --help | grep -F 'controller <init|run|status|workspace-add|workspace-remove|pickup|drop|close|reopen|undo|reconnect|launch-handoff>'
+          "$redeem" slice --help | grep -F 'controller|mode|launch|manage|projection-run|close-focused'
+          "$redeem" slice manage --help 2>&1 | grep -F 'refresh-interval'
+          "$redeem" slice controller --help | grep -F 'controller <init|run|status|workspace-add|workspace-remove|all-enable|all-disable|pickup|pickup-remove|drop|close|reopen|undo|reconnect|launch-handoff>'
           "$redeem" slice mode --help | grep -F 'mode <enable|disable|status>'
           "$redeem" mirror open --help 2>&1 | grep -F 'attach or watch'
           touch "$out"
@@ -503,7 +533,9 @@
         authorityMode = "host_location";
         leechWriteAuthorized = false;
         contractId = "terminal-redeemer.host-leech-slices";
-        contractVersion = "1.0.0";
+        contractVersion = "1.1.0";
+        allEligibleIncludesUnnamed = true;
+        allEligibleRoutesLaunches = false;
         leechModeEnabledByDefault = false;
         controllerEnabledByDefault = false;
         sliceClipboardEnabledByDefault = false;

@@ -20,6 +20,8 @@ func FuzzControlRequestAndResponse(f *testing.F) {
 		[]byte(`{"schema_version":2,"request_id":"fuzz-1","request_id":"other","verb":"status"}`),
 		[]byte(`{"schema_version":2,"request_Id":"fuzz-1","verb":"status"}`),
 		[]byte(`{"schema_version":2,"request_id":"fuzz-1","verb":"status","unknown":true}`),
+		[]byte(`{"schema_version":2,"request_id":"fuzz-all","verb":"all_enable","payload":{}}`),
+		[]byte(`{"schema_version":2,"request_id":"fuzz-remove","verb":"pickup_remove","payload":{"source_id":"src_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`),
 		[]byte(`{"schema_version":2,"request_id":"bad\u0000id","verb":"status"}`),
 		[]byte(`{"schema_version":2`), append([]byte(`{"request_id":"`), 0xff, '"', '}'),
 	} {
@@ -70,8 +72,13 @@ func FuzzControllerStateStore(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	validState.AllEligible = true
+	validAll, err := json.Marshal(validState)
+	if err != nil {
+		f.Fatal(err)
+	}
 	for _, seed := range [][]byte{
-		valid,
+		valid, validAll,
 		[]byte(`{"schema_version":2,"schema_version":2}`),
 		[]byte(`{"schema_version":1,"namespace":{"host":"host","leech":"leech"}}`),
 		[]byte(`{"schema_version":2,"unknown":true}`),

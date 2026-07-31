@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_id": "terminal-redeemer.host-leech-slices",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "protocol": {
     "inventory_schema_versions": [1],
     "rpc_schema_versions": [1],
@@ -24,6 +24,16 @@
     "retry_window": "30s",
     "source_gone_grace": "5s",
     "source_gone_confirmations": 2
+  },
+  "selection": {
+    "formula": "(all_eligible OR selected_workspace OR exact_pickup) AND NOT closed_by_user",
+    "all_eligible_scope": "current_and_future_eligible_sources_including_unnamed_workspaces",
+    "unnamed_spatial_policy": "attach_without_cross_machine_spatial_placement",
+    "routed_launch_policy": "explicit_selected_named_workspaces_only",
+    "all_eligible_state_field": "optional_omitempty_boolean",
+    "all_eligible_undoable": false,
+    "prior_reader_behavior_when_enabled": "reject_unknown_field",
+    "downgrade_requires_disable_first": true
   },
   "authority": {
     "supported_modes": ["host_location"],
@@ -56,10 +66,11 @@
     "launch": ["$REDEEM", "slice", "launch"],
     "launch_reconnect": ["$REDEEM", "slice", "launch", "--reconnect-token", "$TOKEN"],
     "close_focused": ["$REDEEM", "slice", "close-focused"],
+    "manage": ["$REDEEM", "slice", "manage"],
     "controller_init": ["$REDEEM", "slice", "controller", "init"],
     "controller_run": ["$REDEEM", "slice", "controller", "run"],
     "controller_status": ["$REDEEM", "slice", "controller", "status"],
-    "controller_operations": ["workspace-add", "workspace-remove", "pickup", "drop", "close", "reopen", "undo", "reconnect", "launch-handoff"],
+    "controller_operations": ["workspace-add", "workspace-remove", "all-enable", "all-disable", "pickup", "pickup-remove", "drop", "close", "reopen", "undo", "reconnect", "launch-handoff"],
     "mode_enable": ["$REDEEM", "slice", "mode", "enable"],
     "mode_disable": ["$REDEEM", "slice", "mode", "disable"],
     "mode_status": ["$REDEEM", "slice", "mode", "status"],
@@ -103,12 +114,13 @@
       "controller.sourceGoneGrace",
       "controller.sourceGoneConfirmations"
     ],
-    "read_only_options": ["launchCommand", "closeFocusedCommand", "niriIntegrationFragment", "clipboard.enabled"],
+    "read_only_options": ["launchCommand", "closeFocusedCommand", "manageCommand", "niriIntegrationFragment", "clipboard.enabled"],
     "unsupported_options": ["controller.authorityMode", "controller.leechWriteAuthorized"]
   },
   "integration": {
     "launch_helper_option": "programs.terminal-redeemer.slice.launchCommand",
     "close_helper_option": "programs.terminal-redeemer.slice.closeFocusedCommand",
+    "manage_helper_option": "programs.terminal-redeemer.slice.manageCommand",
     "generated_niri_option": "programs.terminal-redeemer.slice.niriIntegrationFragment",
     "packaged_niri_path": "share/terminal-redeemer/host-leech-slices/v1/niri-bindings.kdl",
     "launch_binding": "Mod+Return",

@@ -262,6 +262,22 @@ func TestBoundedHostLeechSoak(t *testing.T) {
 			s.observeCaps(state)
 		}
 
+		if i%211 == 0 {
+			state, effects, err = s.engine.SelectAll(true)
+			if err != nil {
+				t.Fatalf("enable all: %v", err)
+			}
+			s.handleEffects(effects)
+			s.observeCaps(state)
+			state, effects, err = s.engine.SelectAll(false)
+			if err != nil {
+				t.Fatalf("disable all: %v", err)
+			}
+			s.handleEffects(effects)
+			s.observeCaps(state)
+			s.summary.Churn["all_eligible_changes"] += 2
+		}
+
 		if sourceID := s.currentSource(); sourceID != "" {
 			if i%101 == 0 {
 				state, effects, err = s.engine.Pickup(sourceID, true)

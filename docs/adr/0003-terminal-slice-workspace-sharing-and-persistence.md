@@ -6,15 +6,17 @@
 
 ## Context
 
-[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) defines the host-authoritative terminal-slice domain, exact live-only attachment, and this live-slice formula:
+[ADR 0002](0002-host-leech-terminal-slice-domain-and-lifecycle.md) defines the host-authoritative terminal-slice domain and exact live-only attachment. [ADR 0005](0005-global-slice-selection-and-live-management.md) extends its live-slice formula for v1.1:
 
 ```text
-(selected static workspace OR pickup inclusion) AND NOT close exclusion
+(all eligible OR selected static workspace OR pickup inclusion) AND NOT close exclusion
 ```
 
 At proposal time it intentionally left workspace normalization, per-source override lifetime, recovery across observations and source epochs, and controller persistence to later decisions. This ADR made those semantics deterministic before the revisioned protocol, controller, and routed-launch implementations selected fields and storage representations.
 
-### Final v1 amendment
+### Final v1 and v1.1 amendments
+
+V1.1 adds one optional global all-eligible inclusion reason. It includes current and future eligible sources, including unnamed-workspace sources, but does not alter routed launch selection. Global toggles are audited, idempotent, and deliberately absent from undo history. Their exact compatibility and management semantics are owned by [ADR 0005](0005-global-slice-selection-and-live-management.md).
 
 Manual close/drop authority is keyed by the exact verified Zellij SessionID, not the epoch-scoped source ID. It survives ordinary source replacement, headless windows, and source epochs. Explicit reopen or applicable undo clears it early; otherwise only consecutive accepted complete `live_session_ids` absence plus the committed grace deadline expires it automatically. Presence resets evidence, and degraded/duplicate/stale/conflicting/replayed observations never advance it. This final amendment supersedes older exact-source close and no-override-inheritance wording below while leaving exact-source pickups and bounded connection lineage unchanged. Controller state schema 2 fails closed on the old experimental representation; operators back up the entire controller authority directory and explicitly re-enrol rather than migrate in place.
 
@@ -61,21 +63,23 @@ A degraded observation cannot establish or clear a normalization collision becau
 For an eligible source `s` in the latest accepted complete authoritative inventory:
 
 ```text
+all_eligible           := global all-eligible selection is enabled
 workspace_selected(s) := selected workspace keys contains s.workspace key
 picked_up(s)           := an exact-source pickup inclusion applies to s
 closed(s)              := a session-keyed close exclusion applies to s.session_id
-wanted(s)              := (workspace_selected(s) OR picked_up(s)) AND NOT closed(s)
+wanted(s)              := (all_eligible OR workspace_selected(s) OR picked_up(s)) AND NOT closed(s)
 ```
 
-This is ADR 0002's live-slice formula without an additional implicit selection reason. The live slice is recomputed policy, not a named or separately owned collection. `wanted` expresses desire only; conflict, exact-binding verification, and the exhausted-successor gate in section 7 independently determine whether a wanted source is attachable. Those attachment/binding checks do not add to or rewrite the formula.
+This is ADR 0002's v1.1 live-slice formula; all positive reasons remain explicit persisted policy. The live slice is recomputed policy, not a named or separately owned collection. `wanted` expresses desire only; conflict, exact-binding verification, and the exhausted-successor gate in section 7 independently determine whether a wanted source is attachable. Those attachment/binding checks do not add to or rewrite the formula.
 
 The operations have these deterministic meanings:
 
+- **Enable/disable all eligible:** atomically toggle one additive global reason covering every current and future eligible source, including unnamed-workspace sources. The toggles are audited but not undoable, do not clear other selection reasons, and do not change routed-launch workspace selection.
 - **Add workspace:** atomically persist the canonical key first. Reconciliation then makes every currently eligible, non-conflicted matching source wanted unless its exact close exclusion applies. Every later eligible source in that workspace is evaluated by the same formula automatically.
-- **Remove workspace:** atomically remove only that workspace reason. A locally owned projection is detached only if no exact pickup reason remains. Removal never changes host work, erases an independent pickup, or manufactures a close exclusion.
-- **Pickup:** persist an inclusion for one exact eligible source. It may make a source outside selected workspaces wanted. It is not a session-name or workspace-wide inclusion.
+- **Remove workspace:** atomically remove only that workspace reason. A locally owned projection is detached only if neither global all-eligible nor an exact pickup reason remains. Removal never changes host work, erases an independent pickup, or manufactures a close exclusion.
+- **Pickup:** persist an inclusion for one exact eligible source. It may make a source outside selected workspaces wanted. It is not a session-name or workspace-wide inclusion. Pickup removal deletes only this positive reason; `drop` remains a close alias.
 - **Manual local close:** atomically persist the exact-session `closed_by_user` record before detaching or closing the positively owned leech projection. The source remains discoverable, and its workspace and pickup reasons remain intact. An ordinary presence poll or any rejected/degraded observation cannot clear the exclusion or reopen the projection; only explicit reopen/undo clears it early, while bounded confirmed complete session absence plus committed grace expires it automatically.
-- **Reopen:** atomically clear the applicable close exclusion. Reopen is not persisted as a positive inclusion and does not reset connection recovery. A projection is wanted afterward only if the workspace or pickup reason still exists. An applicable undo has the same local inverse effect.
+- **Reopen:** atomically clear the applicable close exclusion. Reopen is not persisted as a positive inclusion and does not reset connection recovery. A projection is wanted afterward only if a global, workspace, or pickup reason still exists. An applicable undo has the same local inverse effect.
 - **Undo:** reverse the latest still-eligible local selection action within retained undo history and atomically commit the inverse plus its audit event. It never reverses host lifecycle or a remote creation effect. If no retained action remains applicable, it has no target and must report that result rather than guessing.
 
 A manual close during attachment recovery stops attachment attempts and detaches the local projection, but it does not reset an already-running source-recovery deadline. This permits the close exclusion to participate in the narrowly bounded lineage rule in section 7. Reopen during stable `disconnected` clears only the exclusion; explicit reconnect is still required to restart exhausted connection recovery.
@@ -86,7 +90,7 @@ The controller persists and reports orthogonal facts rather than one combined st
 
 1. **Host source lifecycle and binding:** eligible, conflict/ineligible, temporarily absent under confirmation, confirmed closed, or replaced, together with the exact source/session binding evidence appropriate to the current epoch.
 2. **Observation quality:** complete authoritative inventory or degraded/incomplete observation.
-3. **Leech desire:** selected-workspace reason, exact pickup inclusion, and exact `closed_by_user` exclusion.
+3. **Leech desire:** global all-eligible reason, selected-workspace reason, exact pickup inclusion, and exact `closed_by_user` exclusion.
 4. **Attachment connection and binding:** `connected`, bounded `reconnecting`, or stable `disconnected` for a wanted projection, plus any durable successor gate that withholds attachment without changing desire.
 5. **Routed-launch intent:** including the separate `launch_pending` outcome for an uncertain host creation response.
 
@@ -141,7 +145,7 @@ Zero candidates means no rebind and recovery remains unresolved until another ac
 
 When recovery exhausts, the controller durably retains a successor gate on the attachment/binding axis. The gate is keyed by the old configured host/leech namespace and the old exact verified Zellij session evidence. A replacement-epoch candidate satisfies the old-successor predicate only when it is eligible in that namespace and has that same exact verified session evidence.
 
-A matching candidate may remain `wanted` under the unchanged workspace/pickup/close formula, but it is not attachable and cannot be automatically adopted while the gate is unresolved. Explicit reconnect must re-observe that exactly one eligible candidate satisfies the predicate, atomically bind that distinct source ID, resolve the gate, and start a new bounded episode. Zero candidates leaves the gate unresolved; multiple candidates are conflict. A candidate with genuinely different verified session evidence does not satisfy the predicate and follows normal automatic projection in a selected workspace without inheriting old state.
+A matching candidate may remain `wanted` under the unchanged global/workspace/pickup/close formula, but it is not attachable and cannot be automatically adopted while the gate is unresolved. Explicit reconnect must re-observe that exactly one eligible candidate satisfies the predicate, atomically bind that distinct source ID, resolve the gate, and start a new bounded episode. Zero candidates leaves the gate unresolved; multiple candidates are conflict. A candidate with genuinely different verified session evidence does not satisfy the predicate and follows normal automatic projection in a selected workspace without inheriting old state.
 
 The gate is current authority, not audit history. It survives controller restart and history pruning. It is retired only by explicit successful resolution, authoritative retirement of the old-source intent under the source-close rules, or an explicit operator action whose shape is defined downstream. It cannot expire merely because audit retention or wall-clock history limits are reached.
 
@@ -174,7 +178,7 @@ A genuinely new session/source never satisfies an exhausted-successor gate. In a
 | Epoch replacement with neither active recovery nor successor gate | Atomically mark old IDs replaced, stop retries, and retire old bindings and state; detach only positively owned old projections before evaluating new sources. Carry no old state. Evaluate every new source normally as a distinct identity and never coexist with its old projection. |
 | Controller restarts | Load one validated committed state, accepted epoch/revision and replay protection, original retry/absence bounds, successor gates, and stable disconnected outcomes; treat prior `connected` as needing observation, resume idempotently, and never duplicate a projection or launch. |
 | Fresh namespace is initialized | Under serialized exclusive initialization, atomically create one validated empty generation only for a newly enrolled namespace proven never initialized. Do not reconcile or launch as part of initialization. |
-| A later genuinely new window appears | Give it its own opaque identity. If eligible in a selected workspace and not matched by a successor gate, project it normally; never inherit old exact-source overrides. |
+| A later genuinely new window appears | Give it its own opaque identity. If eligible under all-eligible or selected-workspace policy and not matched by a successor gate, project it normally; never inherit old exact-source overrides. |
 | A routed launch response is uncertain | Keep the same durable token and `launch_pending` intent; resolve or reconnect only that intent, never create a replacement or automatically fall back locally. |
 
 Confirmed host close requires the implemented controller's finite complete-snapshot confirmation policy. Confirmation takes precedence over recovery: it retires source-bound current matching state rather than keeping a dead source reconnecting. Retired records may remain in bounded audit history but cannot match a future source.
@@ -185,7 +189,7 @@ The controller has one logical current-state commit boundary per host/leech name
 
 - namespace enrollment and initialization authority;
 - the accepted source epoch, revision, authoritative inventory, and retired-epoch replay protection;
-- the canonical selected workspace set;
+- the global all-eligible selection and canonical selected workspace set;
 - exact active pickup and close overrides;
 - source/session bindings, explicit lineage, and projection ownership evidence;
 - active recovery generations and exhaustion bounds;
@@ -258,7 +262,7 @@ A committed token-to-session/source result remains distinct from attachment conn
 
 ### Named or reusable slices
 
-Rejected for MVP. The live slice is the formula over selected workspaces and exact per-source overrides, not a published named object.
+Rejected for MVP. The live slice is the formula over global/workspace selection and exact per-source overrides, not a published named object.
 
 ### Host publication or a per-window allowlist
 

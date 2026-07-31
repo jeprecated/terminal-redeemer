@@ -316,19 +316,28 @@ func FocusedCloseFallback(ctx context.Context, store *Store, cfg ControllerConfi
 		return errors.New("focused projection changed before fallback lock")
 	}
 	engine := &Engine{Store: store, Config: cfg}
-	_, effects, err := engine.Close(initial.SourceID)
+	_, effects, rollbackToken, err := engine.CloseFocused(initial.SourceID)
 	if err != nil {
 		return err
 	}
+	rollback := func(cause error) error {
+		if rollbackToken == nil {
+			return cause
+		}
+		if _, rollbackErr := engine.RollbackFocusedClose(rollbackToken); rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("rollback failed focused close: %w", rollbackErr))
+		}
+		return cause
+	}
 	for _, effect := range effects {
-		if effect.Kind == EffectCloseProjection && effect.SourceID == initial.SourceID && effect.WindowID == initial.WindowID {
+		if effect.Kind == EffectCloseProjection && effect.FocusRequired && effect.SourceID == initial.SourceID && effect.WindowID == initial.WindowID {
 			committed, readErr := store.Read()
 			if readErr != nil {
-				return readErr
+				return rollback(readErr)
 			}
 			fresh, snapshotErr := client.Snapshot(ctx)
 			if snapshotErr != nil {
-				return snapshotErr
+				return rollback(snapshotErr)
 			}
 			reproved, _ := VerifyOwnedWindowsWithConflicts(committed, fresh, processes)
 			matched := false
@@ -339,12 +348,15 @@ func FocusedCloseFallback(ctx context.Context, store *Store, cfg ControllerConfi
 				}
 			}
 			if !matched {
-				return errors.New("focused projection changed after close commit; close effect deferred")
+				return rollback(errors.New("focused projection changed after close commit; close effect deferred"))
 			}
-			return CloseOwnedWindowVerified(ctx, client, initial.WindowID, poll)
+			if closeErr := CloseOwnedWindowVerified(ctx, client, initial.WindowID, poll); closeErr != nil {
+				return rollback(closeErr)
+			}
+			return nil
 		}
 	}
-	return errors.New("focused close intent did not produce exact owned close")
+	return rollback(errors.New("focused close intent did not produce exact owned close"))
 }
 
 func ReproveLeechSpatial(ctx context.Context, store *Store, client LocalNiri, processes ProcessReader, proposal slicelayout.Proposal, currentEpoch string) error {

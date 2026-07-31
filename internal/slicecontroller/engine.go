@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -25,12 +26,13 @@ const (
 )
 
 type Effect struct {
-	Kind        EffectKind            `json:"kind"`
-	SourceID    string                `json:"source_id"`
-	SessionName string                `json:"session_name,omitempty"`
-	Projection  Projection            `json:"projection,omitempty"`
-	WindowID    uint64                `json:"window_id,omitempty"`
-	Proposal    *slicelayout.Proposal `json:"proposal,omitempty"`
+	Kind          EffectKind            `json:"kind"`
+	SourceID      string                `json:"source_id"`
+	SessionName   string                `json:"session_name,omitempty"`
+	Projection    Projection            `json:"projection,omitempty"`
+	WindowID      uint64                `json:"window_id,omitempty"`
+	FocusRequired bool                  `json:"focus_required,omitempty"`
+	Proposal      *slicelayout.Proposal `json:"proposal,omitempty"`
 }
 
 type Engine struct {
@@ -71,7 +73,48 @@ func (e *Engine) ExecuteEffects(ctx context.Context, effects []Effect, execute f
 	}
 	e.effectsMu.Lock()
 	defer e.effectsMu.Unlock()
-	return execute(ctx, effects)
+	if err := execute(ctx, effects); err != nil {
+		for _, effect := range effects {
+			if effect.Kind == EffectLaunchProjection {
+				if recoveryErr := e.RecoverUnstartedLaunches(effects); recoveryErr != nil {
+					return errors.Join(err, fmt.Errorf("recover unstarted launch effects: %w", recoveryErr))
+				}
+				break
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// RecoverUnstartedLaunches removes only launch mappings that an interrupted
+// effect batch never prepared, allowing normal bounded retry to converge them.
+func (e *Engine) RecoverUnstartedLaunches(effects []Effect) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state, err := e.load()
+	if err != nil {
+		return err
+	}
+	changed := 0
+	for _, effect := range effects {
+		if effect.Kind != EffectLaunchProjection {
+			continue
+		}
+		projection, ok := state.Projections[effect.SourceID]
+		if !ok || projection.Status != ProjectionLaunching || projection.AppID != effect.Projection.AppID || projection.ExpectedKittyExecutable != "" || len(projection.ExpectedKittyArgv) != 0 || projection.ExpectedPID != 0 {
+			continue
+		}
+		delete(state.Projections, effect.SourceID)
+		source := state.Sources[effect.SourceID]
+		e.startRecovery(&source, e.now())
+		state.Sources[effect.SourceID] = source
+		changed++
+	}
+	if changed == 0 {
+		return nil
+	}
+	return e.commit(&state, "projection_effect_interrupted", fmt.Sprintf("unstarted=%d", changed))
 }
 
 func (e *Engine) Status() (State, error) { e.mu.Lock(); defer e.mu.Unlock(); return e.load() }
@@ -103,11 +146,127 @@ func (e *Engine) SelectWorkspace(name string, selected bool) (State, []Effect, e
 	}
 	return state, effects, nil
 }
+func (e *Engine) SelectAll(selected bool) (State, []Effect, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state, err := e.load()
+	if err != nil {
+		return State{}, nil, err
+	}
+	if state.AllEligible == selected {
+		return state, nil, nil
+	}
+	state.AllEligible = selected
+	effects := e.reconcileDesired(&state, e.now())
+	if err := e.commit(&state, "all_eligible_selection", fmt.Sprintf("enabled=%t", selected)); err != nil {
+		return State{}, nil, err
+	}
+	return state, effects, nil
+}
+
 func (e *Engine) Pickup(sourceID string, enabled bool) (State, []Effect, error) {
 	return e.override(sourceID, "pickup", enabled)
 }
 func (e *Engine) Close(sourceID string) (State, []Effect, error) {
 	return e.override(sourceID, "close", true)
+}
+
+type FocusedCloseRollback struct {
+	sourceID            string
+	sessionID           string
+	committedGeneration uint64
+	createdDrop         SessionDrop
+	previousSource      TrackedSource
+	committedSource     TrackedSource
+	previousProjection  Projection
+	committedProjection Projection
+	previousUndo        []UndoAction
+	committedUndo       []UndoAction
+}
+
+func (e *Engine) CloseFocused(sourceID string) (State, []Effect, *FocusedCloseRollback, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state, err := e.load()
+	if err != nil {
+		return State{}, nil, nil, err
+	}
+	source, ok := state.Sources[sourceID]
+	if !ok {
+		return State{}, nil, nil, errors.New("unknown source")
+	}
+	if _, excluded := state.ClosedByUser[source.SessionID]; excluded {
+		return state, nil, nil, nil
+	}
+	projection, ok := state.Projections[sourceID]
+	if !ok || projection.Status != ProjectionOwned || projection.NiriWindowID == 0 {
+		return State{}, nil, nil, errors.New("focused close requires an owned projection mapping")
+	}
+
+	now := e.now()
+	rollback := &FocusedCloseRollback{
+		sourceID:           sourceID,
+		sessionID:          source.SessionID,
+		previousSource:     source,
+		previousProjection: projection,
+		previousUndo:       append([]UndoAction(nil), state.Undo...),
+	}
+	createdDrop := SessionDrop{SessionID: source.SessionID, SessionName: source.SessionName, CreatedAt: now}
+	state.ClosedByUser[source.SessionID] = createdDrop
+	e.pushUndo(&state, UndoAction{Kind: "close", SourceID: sourceID, SessionID: source.SessionID, SessionName: source.SessionName, Previous: false, At: now})
+	effects := e.reconcileDesired(&state, now)
+	focusedEffect := false
+	for i := range effects {
+		if effects[i].Kind == EffectCloseProjection && effects[i].SourceID == sourceID && effects[i].WindowID == projection.NiriWindowID {
+			effects[i].FocusRequired = true
+			focusedEffect = true
+		}
+	}
+	if !focusedEffect {
+		return State{}, nil, nil, errors.New("focused close did not produce an exact close effect")
+	}
+	committedSource := state.Sources[sourceID]
+	committedSource.Connection = ""
+	// Stop attempts but retain an already-running absolute recovery deadline so
+	// bounded cross-epoch lineage remains possible after a successful close.
+	state.Sources[sourceID] = committedSource
+	if err := e.commit(&state, "close", sourceID); err != nil {
+		return State{}, nil, nil, err
+	}
+	rollback.committedGeneration = state.Generation
+	rollback.createdDrop = createdDrop
+	rollback.committedSource = state.Sources[sourceID]
+	rollback.committedProjection = state.Projections[sourceID]
+	rollback.committedUndo = append([]UndoAction(nil), state.Undo...)
+	return state, effects, rollback, nil
+}
+
+func (e *Engine) RollbackFocusedClose(token *FocusedCloseRollback) (State, error) {
+	if token == nil {
+		return State{}, errors.New("focused close rollback token is required")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state, err := e.load()
+	if err != nil {
+		return State{}, err
+	}
+	drop, dropped := state.ClosedByUser[token.sessionID]
+	projection, projected := state.Projections[token.sourceID]
+	// An executor may durably recover an unrelated launch before returning its
+	// error. Preserve that newer state, but roll back only while every field
+	// owned by this focused-close token is still exact.
+	if state.Generation < token.committedGeneration || !dropped || !reflect.DeepEqual(drop, token.createdDrop) || !reflect.DeepEqual(state.Sources[token.sourceID], token.committedSource) || !projected || !reflect.DeepEqual(projection, token.committedProjection) || !reflect.DeepEqual(state.Undo, token.committedUndo) {
+		return State{}, errors.New("focused close rollback token is no longer current")
+	}
+	delete(state.ClosedByUser, token.sessionID)
+	state.Sources[token.sourceID] = token.previousSource
+	state.Projections[token.sourceID] = token.previousProjection
+	state.Undo = append([]UndoAction(nil), token.previousUndo...)
+	if err := e.commit(&state, "focused_close_rollback", token.sourceID); err != nil {
+		return State{}, err
+	}
+	return state, nil
 }
 func (e *Engine) Reopen(sourceID string) (State, []Effect, error) {
 	return e.override(sourceID, "close", false)

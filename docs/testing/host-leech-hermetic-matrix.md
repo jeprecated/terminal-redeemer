@@ -42,7 +42,7 @@ go tool cover -func=/tmp/host-leech.cover
 
 | Layer | Owns |
 | --- | --- |
-| Focused Go tests | Protocol validation, inventory authority, exact attachment, controller lifecycle, spatial policy, routing, process ownership, and failure regressions. |
+| Focused Go tests | Protocol validation, inventory authority, exact attachment, controller lifecycle, live management TUI state/actions, spatial policy, routing, process ownership, and failure regressions. |
 | Controller model | Long generated lifecycle histories compared with an independent oracle, including restart, cleanup, cap, handoff, and recovery witnesses. |
 | Native fuzz | Hostile wire, persisted state, argv/environment, journal, transport, and bounded-decoder inputs. |
 | Packaged subprocess/crash | Real process, socket, fsync, cancellation, response-loss, restart, and replay boundaries. |
@@ -87,9 +87,10 @@ ZELLIJ_BIN=/absolute/path/to/zellij-0.43.1 \
 
 This layer owns isolated roots, CLI enrolment/refusal, complete real-Zellij
 inventory, a bounded in-process Niri Unix-socket peer, shell-inert transport,
-controller restart/status, exact routed attachment, response loss, same-token replay,
-cancellation, responsible-process cleanup, and every durable routed-launch
-crash partition. It must never read ambient graphical or credential state.
+controller restart/status, additive all-eligible enable/disable across restart,
+exact routed attachment, response loss, same-token replay, cancellation,
+responsible-process cleanup, and every durable routed-launch crash partition.
+It must never read ambient graphical or credential state.
 
 ## Traceability anchors
 
@@ -99,14 +100,30 @@ crash partition. It must never read ambient graphical or credential state.
 - `internal/sliceattach`, `internal/zellijlive`, and `internal/slicetransport`
   own exact live-only attachment, process evidence, environment isolation, and
   typed transport failures.
-- `internal/slicecontroller` and `internal/slicelayout` own desire, drop,
+- `internal/slicecontroller` and `internal/slicelayout` own the additive
+  all/workspace/pickup-minus-close desire formula, pickup removal, shared-effect
+  recovery of an interrupted 32-source poll fanout across restart, restart/epoch
   recovery, ownership-safe close, generated host-authoritative convergence,
   report-only order drift, and caps.
+  `TestAllEligibleSelectionComposesWithWorkspacePickupAndClose`,
+  `TestInterruptedAllEnableRecoversUnstartedFanout`, the generated model, and
+  the frozen v1.0 reader test are the focused v1.1 anchors. `cmd/redeem` tests
+  additionally cross the real serialized control socket, require fresh focus at
+  the destructive focused-close boundary, and prove failed focus or other
+  effect execution rolls back all newly durable close/undo intent before later
+  observation and reconciliation while generic close remains unchanged.
+- `internal/slicetui` owns controller-socket-only management derivation and
+  actions, independent status axes, orphan close visibility, bounded polling,
+  stable selection, and display-cell-bounded rendering. Its tests use fake
+  clients and Bubble Tea messages, never a TTY or live controller.
 - `internal/slicelaunch` and `internal/slicerpc` own durable same-token routing,
   no fallback, journals, crash replay, and host effect cardinality.
 - `internal/hostleechsoak` composes those production paths under sustained
   deterministic churn.
-- `internal/subprocessacceptance` crosses packaged process/socket/fsync seams.
+- `internal/subprocessacceptance` crosses packaged process/socket/fsync seams,
+  including all-eligible as the sole desired reason across controller restart,
+  exact projection cardinality, focused-close ownership, and same-token host
+  creation/replay without local fallback.
 - `internal/mirror` retains legacy one-shot exact attach compatibility.
 
 Focused regression, fuzz, security/process ownership, crash/subprocess harness,

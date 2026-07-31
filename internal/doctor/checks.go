@@ -250,7 +250,7 @@ func (c LocalInstallCheck) Run(_ context.Context) Result {
 	if _, err := stat(path); err != nil {
 		return Result{Name: c.Name(), Status: StatusPass, Detail: "no local install found"}
 	}
-	return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("%s exists and may shadow the Nix-managed version; run `devbox run uninstall-local` to remove it", path)}
+	return Result{Name: c.Name(), Status: StatusFail, Detail: fmt.Sprintf("%s exists and may shadow the Nix-managed version; run `devenv shell uninstall-local` to remove it", path)}
 }
 
 // StatePathsCheck reports the configured history locations without creating or
