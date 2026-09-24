@@ -22,28 +22,6 @@ type CommandRunner interface {
 	Run(ctx context.Context, command string) ([]byte, error)
 }
 
-type SessionLister interface {
-	List(context.Context) ([]string, error)
-}
-
-type liveSessionLister struct {
-	cataloger zellijlive.Cataloger
-}
-
-func (l liveSessionLister) List(ctx context.Context) ([]string, error) {
-	catalog, err := l.cataloger.Observe(ctx)
-	if err != nil {
-		return nil, err
-	}
-	active := make([]string, 0, len(catalog.Names))
-	for _, name := range catalog.Names {
-		if catalog.Exact(name).Status == zellijlive.StatusActive {
-			active = append(active, name)
-		}
-	}
-	return active, nil
-}
-
 type Options struct {
 	Host            string
 	Profile         string
@@ -56,16 +34,17 @@ type Options struct {
 	Verifier        procmeta.SessionVerifier
 	Resolver        procmeta.SessionCWDResolver
 	SessionEvidence procmeta.SessionEvidenceObserver
-	Lister          SessionLister
+	Cataloger       zellijlive.Cataloger
 }
 
 type Snapshot struct {
-	Host           string      `json:"host"`
-	Profile        string      `json:"profile"`
-	GeneratedAt    time.Time   `json:"generated_at"`
-	Workspaces     []Workspace `json:"workspaces"`
-	ActiveSessions []string    `json:"active_zellij_sessions"`
-	Windows        []Window    `json:"windows"`
+	Host           string            `json:"host"`
+	Profile        string            `json:"profile"`
+	GeneratedAt    time.Time         `json:"generated_at"`
+	Workspaces     []Workspace       `json:"workspaces"`
+	ActiveSessions []string          `json:"active_zellij_sessions"`
+	SessionIDs     map[string]string `json:"active_zellij_session_ids"`
+	Windows        []Window          `json:"windows"`
 }
 
 type Workspace struct {
@@ -245,29 +224,13 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 		}
 	}
 
-	lister := opts.Lister
-	if lister == nil && strings.TrimSpace(opts.FixturePath) == "" {
-		lister = liveSessionLister{cataloger: zellijlive.CommandCataloger{}}
-	}
-	var activeSessions []string
-	if lister != nil {
-		activeSessions = make([]string, 0)
-		sessions, err := lister.List(ctx)
+	var inventory SessionInventory
+	if opts.Cataloger != nil || strings.TrimSpace(opts.FixturePath) == "" {
+		inventory, err = ObserveSessionInventory(ctx, opts.Cataloger)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list live Zellij sessions: %w", err)
 		}
-		sort.Strings(sessions)
-		added := make(map[string]struct{}, len(sessions))
-		for _, session := range sessions {
-			session = strings.TrimSpace(session)
-			if session == "" {
-				continue
-			}
-			if _, found := added[session]; found {
-				continue
-			}
-			added[session] = struct{}{}
-			activeSessions = append(activeSessions, session)
+		for _, session := range inventory.ActiveSessions {
 			if _, found := visibleSessions[session]; found {
 				continue
 			}
@@ -290,7 +253,8 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 		Profile:        opts.Profile,
 		GeneratedAt:    opts.GeneratedAt,
 		Workspaces:     workspaceInventory,
-		ActiveSessions: activeSessions,
+		ActiveSessions: inventory.ActiveSessions,
+		SessionIDs:     inventory.SessionIDs,
 		Windows:        windows,
 	}, nil
 }

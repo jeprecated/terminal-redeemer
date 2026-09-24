@@ -37,12 +37,6 @@ func (e fakeEvidence) ObserveZellijSessions(pid int) (procmeta.ZellijSessionEvid
 	return e[pid], nil
 }
 
-type fakeLister []string
-
-func (l fakeLister) List(context.Context) ([]string, error) {
-	return append([]string(nil), l...), nil
-}
-
 type fakeCataloger struct {
 	catalog zellijlive.Catalog
 }
@@ -173,33 +167,13 @@ func TestCaptureExtractsVerifiedSessionFromTitle(t *testing.T) {
 	}
 }
 
-func TestLiveSessionListerExcludesCacheOnlyDeadSessions(t *testing.T) {
-	t.Parallel()
-
-	lister := liveSessionLister{cataloger: fakeCataloger{catalog: zellijlive.Catalog{
-		Names: []string{"active", "cache-only"},
-		Sessions: map[string]zellijlive.Session{
-			"active":     {Name: "active", Status: zellijlive.StatusActive},
-			"cache-only": {Name: "cache-only", Status: zellijlive.StatusDeadResurrectable},
-		},
-	}}}
-
-	sessions, err := lister.List(context.Background())
-	if err != nil {
-		t.Fatalf("list live sessions: %v", err)
-	}
-	if len(sessions) != 1 || sessions[0] != "active" {
-		t.Fatalf("live sessions = %q, want only active", sessions)
-	}
-}
-
 func TestCaptureIncludesEmptyWorkspaceAndCompleteEmptyActiveInventory(t *testing.T) {
 	fixturePath := filepath.Join(t.TempDir(), "niri.json")
 	payload := []byte(`{"workspaces":[{"id":"empty","idx":1,"name":"Empty"}],"windows":[]}`)
 	if err := os.WriteFile(fixturePath, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := Capture(context.Background(), Options{FixturePath: fixturePath, Lister: fakeLister{}})
+	snapshot, err := Capture(context.Background(), Options{FixturePath: fixturePath, Cataloger: fakeCataloger{catalog: activeCatalog()}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +206,7 @@ func TestCaptureAddsHeadlessSessionsWithoutExactDuplicates(t *testing.T) {
 		Reader:          fakeReader{100: {CWD: "/visible"}},
 		Resolver:        fakeResolver{"visible": "/visible", "detached": "/headless/project"},
 		SessionEvidence: fakeEvidence{100: {KittyVerified: true, Complete: true, Candidates: []string{"visible"}}},
-		Lister:          fakeLister{"detached", "visible", "detached"},
+		Cataloger:       fakeCataloger{catalog: activeCatalog("detached", "visible")},
 		ProcessMetadata: procmeta.Config{IncludeSessionTag: true},
 	})
 	if err != nil {

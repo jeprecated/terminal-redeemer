@@ -114,7 +114,7 @@ func TestProcessEvidenceRequiresExactAttachArgv(t *testing.T) {
 }
 
 func TestSafeSessionNameAndIdentity(t *testing.T) {
-	if !SafeSessionName("project-1") || SafeSessionName("../project") || SafeSessionName("bad name") {
+	if !SafeSessionName("project-1") || !SafeSessionName("-Agent") || !SafeSessionName("Agent workspace") || SafeSessionName("../project") || SafeSessionName("bad\nname") {
 		t.Fatal("session name validation failed")
 	}
 	if SessionID("boot", "name", 1, 2) == SessionID("boot", "name", 1, 3) {

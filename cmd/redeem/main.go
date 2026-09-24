@@ -153,6 +153,8 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	switch args[0] {
 	case "snapshot":
 		return runMirrorSnapshot(args[1:], resolvedConfig, stdout, stderr)
+	case "session-catalog":
+		return runMirrorSessionCatalog(args[1:], resolvedConfig, stdout, stderr)
 	case "list":
 		return runMirrorList(args[1:], resolvedConfig, stdout, stderr)
 	case "open":

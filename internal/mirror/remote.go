@@ -90,6 +90,14 @@ func DecodeSnapshot(raw []byte) (Snapshot, error) {
 	if snapshot.Windows == nil {
 		return Snapshot{}, fmt.Errorf("malformed remote mirror snapshot: windows is missing")
 	}
+	// Absence remains readable for legacy discovery. If incarnation evidence
+	// is supplied, it must be complete and consistent, not a partial hint.
+	if snapshot.SessionIDs != nil {
+		inventory := SessionInventory{GeneratedAt: snapshot.GeneratedAt, ActiveSessions: snapshot.ActiveSessions, SessionIDs: snapshot.SessionIDs}
+		if err := inventory.validate(); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	for i, window := range snapshot.Windows {
 		if window.Terminal != nil {
 			if len(window.Terminal.Project) > 2 {

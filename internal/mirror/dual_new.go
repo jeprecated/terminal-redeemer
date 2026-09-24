@@ -70,16 +70,9 @@ func PlanSourceAttach(cfg SourceAttachConfig) (Command, error) {
 }
 
 func sourceAttachArgv(snapshotCommand []string, session string, workspace string) ([]string, error) {
-	if len(snapshotCommand) < 3 || snapshotCommand[len(snapshotCommand)-2] != "mirror" || snapshotCommand[len(snapshotCommand)-1] != "snapshot" {
-		return nil, fmt.Errorf("mirror.snapshotCommand must end with exact argv suffix `mirror snapshot` for source Kitty support")
-	}
-	prefix := append([]string(nil), snapshotCommand[:len(snapshotCommand)-2]...)
-	if len(prefix) == 0 || strings.TrimSpace(prefix[0]) == "" {
-		return nil, fmt.Errorf("mirror.snapshotCommand has no executable prefix")
-	}
-	remoteArgv := append(prefix, "mirror", "attach-local", "--session", session)
+	args := []string{"--session", session}
 	if workspace != "" {
-		remoteArgv = append(remoteArgv, "--workspace", workspace)
+		args = append(args, "--workspace", workspace)
 	}
-	return remoteArgv, nil
+	return sourceHelperArgv(snapshotCommand, "attach-local", args...)
 }

@@ -1,6 +1,13 @@
 # Minimal persistent mirror reconnect
 
-Status: implementation plan; no runtime changes made. The smaller direction and the two highlighted requirements below are approved. This document records the proposed implementation sequence, not completed work.
+Status: implementation in progress. The smaller direction and the two highlighted requirements below are approved. Public window launch behaviour has not changed.
+
+### Progress
+
+- Milestone 1, catalog foundation: implemented additive boot-bound session IDs, strict complete inventory validation, a headless `mirror session-catalog` source helper, and bounded non-interactive remote acquisition using the configured helper prefix. Empty inventory is distinct from unsupported or failed observation. Literal session names are preserved rather than tokenized.
+- Fixed the pinned Zellij empty-catalog outcome: only its exact exit-1/stderr result is accepted as empty; other failures remain unknown. Verified against isolated Zellij 0.44.3 directories, never the user's sessions.
+- Validation for this checkpoint: `go test ./...`, `go test -race ./internal/mirror ./internal/zellijlive ./cmd/redeem`, `go vet ./...`, and `nix build .#terminal-redeemer --no-link` passed.
+- Still pending within milestone 1: race-free exact-socket attachment, remote outcomes and proven attachment readiness. Milestones 2–5 are not complete. The reference helper's 250 ms liveness timer is not proof of attachment and will not be reused as readiness.
 
 ## In one minute
 

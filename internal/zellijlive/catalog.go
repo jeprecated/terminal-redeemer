@@ -9,12 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jmo/terminal-redeemer/internal/procrun"
 )
@@ -24,8 +26,6 @@ const SocketContractDir = "contract_version_1"
 const MaxSocketPathBytes = 107
 const MaxCatalogBytes = 1 << 20
 const MaxCatalogEntries = 4096
-
-var safeSessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type CommandCataloger struct {
 	Command    string
@@ -77,9 +77,16 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	}
 	defer os.RemoveAll(emptyCache)
 	environment := scrubEnv(os.Environ(), map[string]string{"ZELLIJ_SOCKET_DIR": base, "XDG_CACHE_HOME": emptyCache})
-	out, commandErr := runBounded(ctx, command, []string{"list-sessions", "--short"}, environment)
-	if commandErr != nil {
+	out, diagnostic, commandErr := runSeparated(ctx, command, []string{"list-sessions", "--short", "--no-formatting"}, environment)
+	// Pinned Zellij reports an empty live catalog on stderr with exit 1.
+	// No other failure (or extra output) may authorize an empty inventory.
+	var exitErr *exec.ExitError
+	empty := ctx.Err() == nil && errors.As(commandErr, &exitErr) && exitErr.ExitCode() == 1 && len(out) == 0 && string(diagnostic) == "No active zellij sessions found.\n"
+	if commandErr != nil && !empty {
 		return Catalog{}, fmt.Errorf("list live Zellij sessions: %w", commandErr)
+	}
+	if len(diagnostic) != 0 && !empty {
+		return Catalog{}, fmt.Errorf("list live Zellij sessions returned unexpected diagnostic: %s", diagnostic)
 	}
 	listed, err := parseLines(out)
 	if err != nil {
@@ -185,7 +192,13 @@ func verifyOwnedDirectory(path string, uid int) error {
 	return nil
 }
 
-func SafeSessionName(name string) bool { return safeSessionName.MatchString(name) && len(name) <= 255 }
+// SafeSessionName accepts literal Zellij socket filenames, not shell tokens.
+// Arguments still require quoting/option boundaries at their call sites.
+func SafeSessionName(name string) bool {
+	return name != "" && name != "." && name != ".." && len(name) <= 255 &&
+		!strings.ContainsRune(name, filepath.Separator) && utf8.ValidString(name) && strings.TrimSpace(name) == name &&
+		strings.IndexFunc(name, unicode.IsControl) < 0
+}
 
 func SessionID(bootID, name string, device, inode uint64) string {
 	payload := fmt.Sprintf("terminal-redeemer/session/v1\x00%d:%s\x00%d:%d", len(bootID), bootID, device, inode)
@@ -198,14 +211,11 @@ func parseLines(payload []byte) ([]string, error) {
 	scanner.Buffer(make([]byte, 4096), 64<<10)
 	out := make([]string, 0)
 	for scanner.Scan() {
-		value := strings.TrimSpace(scanner.Text())
-		if value == "" || strings.HasPrefix(value, "No active zellij sessions") {
-			continue
+		value := scanner.Text()
+		if !SafeSessionName(value) {
+			return nil, fmt.Errorf("invalid literal session name %q", value)
 		}
-		fields := strings.Fields(value)
-		if len(fields) > 0 {
-			out = append(out, fields[0])
-		}
+		out = append(out, value)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -226,15 +236,21 @@ func (output *boundedOutput) Write(payload []byte) (int, error) {
 }
 
 func runBounded(ctx context.Context, command string, args []string, environment []string) ([]byte, error) {
+	output, diagnostic, err := runSeparated(ctx, command, args, environment)
+	return append(output, diagnostic...), err
+}
+
+func runSeparated(ctx context.Context, command string, args []string, environment []string) ([]byte, []byte, error) {
 	output := &boundedOutput{max: MaxCatalogBytes}
+	diagnostic := &boundedOutput{max: MaxCatalogBytes}
 	cmd := procrun.CommandContext(ctx, command, args...)
 	if environment != nil {
 		cmd.Env = environment
 	}
 	cmd.Stdout = output
-	cmd.Stderr = output
+	cmd.Stderr = diagnostic
 	err := procrun.ContextError(ctx, cmd.Run())
-	return append([]byte(nil), output.Bytes()...), err
+	return append([]byte(nil), output.Bytes()...), append([]byte(nil), diagnostic.Bytes()...), err
 }
 
 func scrubEnv(values []string, set map[string]string) []string {
