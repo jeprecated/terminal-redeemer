@@ -105,6 +105,28 @@ type testSessionControl struct {
 	expired     bool
 	stale       string
 	active      SessionGrant
+	slots       int
+	denySlot    bool
+}
+
+func (c *testSessionControl) acquirePendingSlot() (func(), error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.denySlot {
+		return nil, fmt.Errorf("pending capacity occupied")
+	}
+	if c.slots != 0 {
+		panic("overlapping pending transports")
+	}
+	c.slots++
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.slots--
+		if c.slots < 0 {
+			panic("pending slot released twice")
+		}
+	}, nil
 }
 
 func (c *testSessionControl) Exchange(ctx context.Context, r SessionControlRequest) (SessionControlReply, error) {

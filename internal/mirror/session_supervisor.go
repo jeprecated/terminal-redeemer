@@ -25,6 +25,7 @@ type SessionControl interface {
 type SessionControlRequest struct {
 	Token, Client, Session, SessionID string
 	Attempt, Event                    string
+	State                             string
 	Retry                             bool
 }
 type SessionGrant struct {
@@ -39,6 +40,9 @@ type SessionControlReply struct {
 	// Ended is reserved for authoritative evidence for this immutable identity.
 	// Reset invalidates a pending grant only; healthy transports survive restart.
 	Ended, Reset bool
+	// An expired known lease can be revoked even if readiness was reported late.
+	// Unlike restart Reset, this is bound to exactly one attempt.
+	CancelAttempt string
 }
 type SessionSupervisorConfig struct {
 	Remote                    RemoteConfig
@@ -129,6 +133,13 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 	busy, retry := false, false
 	var reports []sessionReport // At most ready + lost for the one current child.
 	var child *sessionTransport
+	var releaseSlot func()
+	releasePending := func() {
+		if releaseSlot != nil {
+			releaseSlot()
+			releaseSlot = nil
+		}
+	}
 	var output <-chan sessionOutput
 	var done <-chan sessionTransportResult
 	var grant SessionGrant
@@ -144,6 +155,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			<-child.done
 			child.input.Close()
 		}
+		releasePending()
 		_ = writeSessionTerminal(context.Background(), outFD, []byte("\x1b[?2004l\x1b[0m"))
 	}()
 	phase := func() sessionPhase {
@@ -195,6 +207,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 		}
 		busy = true
 		m := request
+		m.State = string(phase())
 		m.Retry = retry
 		retry = false
 		if len(reports) > 0 {
@@ -205,8 +218,8 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			callCtx, stop := context.WithTimeout(ctx, time.Second)
 			defer stop()
 			reply, err := cfg.Control.Exchange(callCtx, m)
-			if callCtx.Err() != nil {
-				err = callCtx.Err()
+			if late := sessionContextError(callCtx); late != nil {
+				err = late
 			}
 			select {
 			case replies <- sessionControlResult{m, reply, err}:
@@ -243,6 +256,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 				lose()
 				return
 			}
+			releasePending()
 			reports = append(reports, sessionReport{grant.Attempt, "ready"})
 			notice = ""
 			send()
@@ -302,6 +316,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			gate.close()
 			child.stop()
 			child.input.Close()
+			releasePending()
 			child = nil
 			output = nil
 			done = nil
@@ -322,7 +337,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			busy = false
 			if result.err != nil {
 				retry = retry || result.request.Retry
-				notice = "Shared recovery unavailable"
+				notice = "Shared recovery unavailable: " + recoveryDisplayReason(result.err.Error())
 				render()
 				continue
 			}
@@ -339,6 +354,9 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			notice = ""
 			if last.Ended {
 				return nil
+			}
+			if child != nil && last.CancelAttempt == grant.Attempt {
+				lose()
 			}
 			if last.Reset && gate.current() == 0 {
 				if child != nil {
@@ -362,8 +380,14 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 				startupOutput = nil
 				stopping = false
 				proved = false
-				child, e = startSessionTransport(ctx, command, g.Attempt, inFD)
+				if admission, ok := cfg.Control.(interface{ acquirePendingSlot() (func(), error) }); ok {
+					releaseSlot, e = admission.acquirePendingSlot()
+				}
+				if e == nil {
+					child, e = startSessionTransport(ctx, command, g.Attempt, inFD)
+				}
 				if e != nil {
+					releasePending()
 					failure = "Cannot start attachment: " + e.Error()
 					reports = append(reports, sessionReport{grant.Attempt, "lost"})
 				} else {

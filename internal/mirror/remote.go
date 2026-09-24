@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -49,6 +50,23 @@ func AcquireRemote(ctx context.Context, runner Runner, cfg RemoteConfig) (Snapsh
 	if len(cfg.SnapshotCommand) == 0 || strings.TrimSpace(cfg.SnapshotCommand[0]) == "" {
 		return Snapshot{}, fmt.Errorf("remote snapshot command is empty")
 	}
+	// Native discovery (including follow) respects shared outage recovery. This
+	// is a read-only local status query, not another SSH check or daemon start.
+	// Custom runners retain their existing deterministic IO seam.
+	switch runner.(type) {
+	case ExecRunner, *ExecRunner:
+		local, stop := context.WithTimeout(ctx, time.Second)
+		client := &SessionRecoveryClient{Remote: cfg}
+		status, found, statusErr := client.ExistingStatus(local)
+		client.Close()
+		stop()
+		if statusErr != nil {
+			return Snapshot{}, fmt.Errorf("shared recovery status: %w", statusErr)
+		}
+		if found && !status.Available {
+			return Snapshot{}, fmt.Errorf("shared host recovery: %s (retry %s)", status.Reason, status.RetryAt.Format(time.RFC3339))
+		}
+	}
 	args, err := buildSSHArgs(cfg.SSHOptions, nil, cfg.Host, QuoteCommand(cfg.SnapshotCommand))
 	if err != nil {
 		return Snapshot{}, err
@@ -56,6 +74,9 @@ func AcquireRemote(ctx context.Context, runner Runner, cfg RemoteConfig) (Snapsh
 	payload, err := runner.Output(ctx, Command{Name: cfg.SSHCommand, Args: args})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("acquire mirror snapshot from %s: %w", cfg.Host, err)
+	}
+	if err := sessionContextError(ctx); err != nil {
+		return Snapshot{}, err
 	}
 	snapshot, err := DecodeSnapshot(payload)
 	if err != nil {

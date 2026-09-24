@@ -46,21 +46,28 @@ func AcquireSessionInventory(ctx context.Context, runner Runner, cfg RemoteConfi
 	if _, bounded := ctx.Deadline(); !bounded {
 		return SessionInventory{}, fmt.Errorf("session inventory requires a context deadline")
 	}
-	if err := ctx.Err(); err != nil {
+	if err := sessionContextError(ctx); err != nil {
 		return SessionInventory{}, err
 	}
 	command, err := PlanSessionCatalog(cfg)
 	if err != nil {
 		return SessionInventory{}, err
 	}
-	if runner == nil {
-		runner = ExecRunner{}
+	var payload []byte
+	switch native := runner.(type) {
+	case nil:
+		payload, err = boundedSessionCatalog(ctx, ExecRunner{}, command)
+	case ExecRunner:
+		payload, err = boundedSessionCatalog(ctx, native, command)
+	case *ExecRunner:
+		payload, err = boundedSessionCatalog(ctx, *native, command)
+	default:
+		payload, err = runner.Output(ctx, command)
 	}
-	payload, err := runner.Output(ctx, command)
 	if err != nil {
 		return SessionInventory{}, fmt.Errorf("acquire session inventory from %s: %w", cfg.Host, err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := sessionContextError(ctx); err != nil {
 		return SessionInventory{}, err
 	}
 	return DecodeSessionInventory(payload)

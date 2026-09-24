@@ -76,6 +76,11 @@ support_kitty_keyboard_protocol false
 show_startup_tips false
 show_release_notes false
 on_force_close "quit"
+keybinds {
+    normal {
+        bind "Ctrl e" { Detach; }
+    }
+}
 `
 	if err := os.WriteFile(filepath.Join(config, "config.kdl"), []byte(cfg), 0600); err != nil {
 		t.Fatal(err)
@@ -237,8 +242,9 @@ func TestRealPinnedZellijExactAttachmentReadiness(t *testing.T) {
 			if err != nil || string(data) != "verified-input" {
 				t.Fatalf("input missing from bound shell: %q %v", data, err)
 			}
-			// Default Zellij Ctrl-o, d deliberately detaches this client.
-			p.file.Write([]byte{15, 'd'})
+			// A single configured Detach avoids racing Zellij's asynchronous
+			// mode switch by injecting Ctrl-o and d in the same input batch.
+			p.file.Write([]byte{5})
 			p.waitText(t, AttachmentMarker(testAttachmentAttempt, "detached"))
 			select {
 			case err := <-p.exited:
@@ -323,7 +329,7 @@ func TestRealPinnedZellijReplacementDuringAttachmentStaysPinned(t *testing.T) {
 	if err != nil || string(data) != "original" {
 		t.Fatalf("replacement received attachment input: %q %v", data, err)
 	}
-	p.file.Write([]byte{15, 'd'})
+	p.file.Write([]byte{5})
 	p.waitText(t, AttachmentMarker(testAttachmentAttempt, "detached"))
 }
 
