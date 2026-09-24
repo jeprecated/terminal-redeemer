@@ -3,12 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"golang.org/x/sys/unix"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -56,12 +56,11 @@ func TestMirrorSessionCatalogIsHeadlessAndBootBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
+	id, err := zellijlive.ExactSocketIDAt(unix.AT_FDCWD, path, boot, "-Agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stat := info.Sys().(*syscall.Stat_t)
-	if inventory.SessionIDs["-Agent"] != zellijlive.SessionID(boot, "-Agent", uint64(stat.Dev), stat.Ino) {
+	if inventory.SessionIDs["-Agent"] != id {
 		t.Fatalf("not boot-bound: %+v", inventory)
 	}
 }

@@ -54,7 +54,10 @@ func ObserveSessionInventory(ctx context.Context, observer zellijlive.Cataloger)
 		switch session.Status {
 		case zellijlive.StatusActive:
 			inventory.ActiveSessions = append(inventory.ActiveSessions, name)
-			inventory.SessionIDs[name] = session.ID
+			if session.ExactID == "" {
+				return SessionInventory{}, fmt.Errorf("session %q lacks exact socket birth identity; source helper/filesystem capability required", name)
+			}
+			inventory.SessionIDs[name] = session.ExactID
 		case zellijlive.StatusDeadResurrectable:
 			// Cache entries are not active and must never be reattached by recovery.
 		default:

@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jmo/terminal-redeemer/internal/procrun"
+	"golang.org/x/sys/unix"
 )
 
 const PinnedVersion = "0.44.3"
@@ -51,14 +52,7 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	}
 	base := cataloger.SocketBase
 	if base == "" {
-		base = os.Getenv("ZELLIJ_SOCKET_DIR")
-	}
-	if base == "" {
-		runtime := os.Getenv("XDG_RUNTIME_DIR")
-		if runtime == "" {
-			runtime = filepath.Join("/run/user", strconv.Itoa(uid))
-		}
-		base = filepath.Join(runtime, "zellij")
+		base = DefaultSocketBase(uid)
 	}
 	contractDir := filepath.Join(base, SocketContractDir)
 	if err := verifyOwnedDirectory(base, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -67,9 +61,8 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	if err := verifyOwnedDirectory(contractDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("validate Zellij contract socket directory: %w", err)
 	}
-	versionOut, err := runBounded(ctx, command, []string{"--version"}, nil)
-	if err != nil || strings.TrimSpace(string(versionOut)) != "zellij "+PinnedVersion {
-		return Catalog{}, fmt.Errorf("pinned Zellij %s is unavailable", PinnedVersion)
+	if err := VerifyVersion(ctx, command); err != nil {
+		return Catalog{}, err
 	}
 	emptyCache, err := os.MkdirTemp("", "redeem-zellij-catalog-cache-*")
 	if err != nil {
@@ -131,7 +124,10 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 			byName[name] = Session{Name: name, Status: StatusDuplicate}
 			continue
 		}
-		byName[name] = Session{Name: name, ID: SessionID(cataloger.BootID, name, uint64(stat.Dev), stat.Ino), Status: StatusActive}
+		// Exact reconnect evidence is additive: unsupported statx birth time
+		// must not change existing checkpoint discovery or checkpoint IDs.
+		exactID, _ := ExactSocketIDAt(unix.AT_FDCWD, filepath.Join(contractDir, name), cataloger.BootID, name)
+		byName[name] = Session{Name: name, ID: SessionID(cataloger.BootID, name, uint64(stat.Dev), stat.Ino), ExactID: exactID, Status: StatusActive}
 	}
 	for name, count := range counts {
 		if count > 1 {
@@ -175,6 +171,27 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	}
 	sort.Strings(names)
 	return Catalog{Sessions: byName, Names: names, ResurrectionCacheAvailable: resurrectionCacheAvailable}, nil
+}
+
+// DefaultSocketBase is shared by observation and exact attachment.
+func DefaultSocketBase(uid int) string {
+	if base := os.Getenv("ZELLIJ_SOCKET_DIR"); base != "" {
+		return base
+	}
+	runtime := os.Getenv("XDG_RUNTIME_DIR")
+	if runtime == "" {
+		runtime = filepath.Join("/run/user", strconv.Itoa(uid))
+	}
+	return filepath.Join(runtime, "zellij")
+}
+
+// VerifyVersion bounds output and requires the exact supported IPC contract.
+func VerifyVersion(ctx context.Context, command string) error {
+	out, err := runBounded(ctx, command, []string{"--version"}, nil)
+	if err != nil || strings.TrimSpace(string(out)) != "zellij "+PinnedVersion {
+		return fmt.Errorf("pinned Zellij %s is unavailable", PinnedVersion)
+	}
+	return nil
 }
 
 func verifyOwnedDirectory(path string, uid int) error {

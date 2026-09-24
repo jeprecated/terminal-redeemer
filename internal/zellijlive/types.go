@@ -18,9 +18,10 @@ const (
 )
 
 type Session struct {
-	Name   string
-	ID     string
-	Status Status
+	Name    string
+	ID      string // historical checkpoint identity
+	ExactID string // boot + socket inode + birth time; empty means unsupported
+	Status  Status
 }
 
 type Catalog struct {

@@ -27,13 +27,17 @@ func PlanSessionCatalog(cfg RemoteConfig) (Command, error) {
 	}
 	// OpenSSH takes the first value of -o options. These must precede user
 	// options: a background recovery check must not become a password prompt.
-	options := []string{"-o", "BatchMode=yes", "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"}
+	options := unattendedSSHOptions()
 	options = append(options, cfg.SSHOptions...)
 	args, err := buildSSHArgs(options, []string{"-T", "-n"}, cfg.Host, QuoteCommand(remote))
 	if err != nil {
 		return Command{}, err
 	}
 	return Command{Name: cfg.SSHCommand, Args: args}, nil
+}
+
+func unattendedSSHOptions() []string {
+	return []string{"-o", "BatchMode=yes", "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"}
 }
 
 // AcquireSessionInventory is an observation, never an attach/create operation.

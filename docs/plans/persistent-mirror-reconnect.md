@@ -7,7 +7,10 @@ Status: implementation in progress. The smaller direction and the two highlighte
 - Milestone 1, catalog foundation: implemented additive boot-bound session IDs, strict complete inventory validation, a headless `mirror session-catalog` source helper, and bounded non-interactive remote acquisition using the configured helper prefix. Empty inventory is distinct from unsupported or failed observation. Literal session names are preserved rather than tokenized.
 - Fixed the pinned Zellij empty-catalog outcome: only its exact exit-1/stderr result is accepted as empty; other failures remain unknown. Verified against isolated Zellij 0.44.3 directories, never the user's sessions.
 - Validation for this checkpoint: `go test ./...`, `go test -race ./internal/mirror ./internal/zellijlive ./cmd/redeem`, `go vet ./...`, and `nix build .#terminal-redeemer --no-link` passed.
-- Still pending within milestone 1: race-free exact-socket attachment, remote outcomes and proven attachment readiness. Milestones 2–5 are not complete. The reference helper's 250 ms liveness timer is not proof of attachment and will not be reused as readiness.
+- Milestone 1, exact attachment: implemented private `mirror session-attach`, descriptor-anchored and post-link-verified socket pinning, attempt-local cache isolation, bounded protocol relay, and attempt-specific readiness rendered by the real Zellij client. Status probes and startup stdout cannot mark ready. Session switching becomes detach; reconnect has no creation authority.
+- A real same-name replacement test exposed immediate socket-inode reuse. Reconnect IDs now include `statx` socket birth time, with no unsupported-filesystem fallback. Existing checkpoint IDs are unchanged.
+- Milestone 1 is complete. Real-PTY tests cover literal names, verified fresh input, replacement before and during attachment, detach, cancellation and source-session survival. Full Go tests, targeted race tests, three real-Zellij/PTY race repetitions, vet and a local Nix package build passed. The vendor hash was recomputed for `creack/pty`. See [exact attachment evidence](../testing/exact-mirror-attachment.md).
+- Milestones 2–5 are not complete. Physical-input discard and thirty-window host sharing remain mandatory before public launch cutover; this source-side helper alone does not provide either guarantee.
 
 ## In one minute
 

@@ -20,7 +20,7 @@
           pname = "terminal-redeemer";
           version = "0.1.0";
           src = ./.;
-          vendorHash = "sha256-sDiLEcBE6qw6bM0+AlyAN47W1f7wySG8vYcCTrbIQSU=";
+          vendorHash = "sha256-hYELoFa+ppt/C6GM+ld+bZS9xSJoBGauwLWEu1UQxnM=";
           subPackages = [ "cmd/redeem" ];
 
           meta = with pkgs.lib; {

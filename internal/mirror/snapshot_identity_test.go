@@ -27,7 +27,7 @@ func TestCaptureNamesAndIncarnationsComeFromOneObservation(t *testing.T) {
 	}
 	for _, window := range snapshot.Windows {
 		id, err := snapshot.ExactSessionID(SessionName(window))
-		if err != nil || !window.Headless || id != catalog.catalog.Sessions[SessionName(window)].ID {
+		if err != nil || !window.Headless || id != catalog.catalog.Sessions[SessionName(window)].ExactID {
 			t.Fatalf("headless identity=%q err=%v window=%+v", id, err, window)
 		}
 	}

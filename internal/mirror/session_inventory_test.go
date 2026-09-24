@@ -30,7 +30,7 @@ func (c *inventoryCataloger) Observe(context.Context) (zellijlive.Catalog, error
 func activeCatalog(names ...string) zellijlive.Catalog {
 	catalog := zellijlive.Catalog{Names: append([]string{}, names...), Sessions: map[string]zellijlive.Session{}}
 	for i, name := range names {
-		catalog.Sessions[name] = zellijlive.Session{Name: name, ID: zellijlive.SessionID("boot", name, 1, uint64(i+1)), Status: zellijlive.StatusActive}
+		catalog.Sessions[name] = zellijlive.Session{Name: name, ID: "checkpoint-id", ExactID: zellijlive.SessionID("boot", name, 1, uint64(i+1)), Status: zellijlive.StatusActive}
 	}
 	return catalog
 }
@@ -48,7 +48,7 @@ func TestSessionInventoryObservesOnceAndPreservesExactNames(t *testing.T) {
 		t.Fatalf("calls=%d inventory=%+v", observer.calls, inventory)
 	}
 	for _, name := range inventory.ActiveSessions {
-		if inventory.SessionIDs[name] != catalog.Sessions[name].ID {
+		if inventory.SessionIDs[name] != catalog.Sessions[name].ExactID {
 			t.Fatalf("identity changed for %q", name)
 		}
 	}
@@ -70,10 +70,10 @@ func TestSessionInventoryRejectsIncompleteOrAmbiguousCatalogs(t *testing.T) {
 		"missing map entry":   func(c *zellijlive.Catalog) { delete(c.Sessions, "active") },
 		"missing name entry":  func(c *zellijlive.Catalog) { c.Names = []string{} },
 		"wrong embedded name": func(c *zellijlive.Catalog) { s := c.Sessions["active"]; s.Name = "other"; c.Sessions["active"] = s },
-		"missing identity":    func(c *zellijlive.Catalog) { s := c.Sessions["active"]; s.ID = ""; c.Sessions["active"] = s },
+		"missing identity":    func(c *zellijlive.Catalog) { s := c.Sessions["active"]; s.ExactID = ""; c.Sessions["active"] = s },
 		"malformed identity": func(c *zellijlive.Catalog) {
 			s := c.Sessions["active"]
-			s.ID = "ses_not-a-digest"
+			s.ExactID = "ses_not-a-digest"
 			c.Sessions["active"] = s
 		},
 		"nil catalog": func(c *zellijlive.Catalog) { *c = zellijlive.Catalog{} },
