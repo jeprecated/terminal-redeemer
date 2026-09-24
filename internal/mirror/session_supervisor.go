@@ -1,0 +1,389 @@
+package mirror
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/charmbracelet/x/term"
+	"golang.org/x/sys/unix"
+)
+
+// SessionControl is the narrow seam for the shared coordinator. Exchange must
+// honour ctx. It schedules host checks/admission; the terminal helper never
+// probes a host or grants itself another attachment. No public launch uses this
+// seam until the cross-process coordinator is implemented.
+type SessionControl interface {
+	Exchange(context.Context, SessionControlRequest) (SessionControlReply, error)
+}
+type SessionControlRequest struct {
+	Token, Client, Session, SessionID string
+	Attempt, Event                    string
+	Retry                             bool
+}
+type SessionGrant struct {
+	Attempt  string
+	Deadline time.Time
+}
+type SessionControlReply struct {
+	Checking bool
+	Reason   string
+	RetryAt  time.Time
+	Grant    *SessionGrant
+	// Ended is reserved for authoritative evidence for this immutable identity.
+	// Reset invalidates a pending grant only; healthy transports survive restart.
+	Ended, Reset bool
+}
+type SessionSupervisorConfig struct {
+	Remote                    RemoteConfig
+	Session, SessionID, Token string
+	Input, Output             *os.File
+	Control                   SessionControl
+}
+type sessionControlResult struct {
+	request SessionControlRequest
+	reply   SessionControlReply
+	err     error
+}
+type sessionReport struct{ attempt, event string }
+
+type sessionPhase string
+
+const (
+	sessionOffline    sessionPhase = "offline"
+	sessionChecking   sessionPhase = "checking"
+	sessionConnecting sessionPhase = "connecting"
+	sessionReady      sessionPhase = "ready"
+)
+
+// RunSessionSupervisor retains one physical terminal across disposable SSH
+// PTYs. It performs no creation, window management, discovery or host backoff.
+func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) error {
+	if cfg.Input == nil || cfg.Output == nil || cfg.Control == nil || cfg.Token == "" {
+		return fmt.Errorf("terminal, identity and shared control are required")
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	request := SessionControlRequest{Token: cfg.Token, Client: hex.EncodeToString(nonce[:]), Session: cfg.Session, SessionID: cfg.SessionID}
+	freshAttempt := func() error {
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return err
+		}
+		request.Attempt = hex.EncodeToString(nonce[:])
+		return nil
+	}
+	if err := freshAttempt(); err != nil {
+		return err
+	}
+	// Validate immutable planning inputs before touching the terminal.
+	if _, err := PlanSessionAttachment(cfg.Remote, cfg.Session, cfg.SessionID, request.Client); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	inFD, outFD := int(cfg.Input.Fd()), int(cfg.Output.Fd())
+	flags := make(map[int]int)
+	for _, fd := range []int{inFD, outFD} {
+		value, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+		if err != nil {
+			return err
+		}
+		flags[fd] = value
+	}
+	baseline, err := term.MakeRaw(uintptr(inFD))
+	if err != nil {
+		return fmt.Errorf("projection requires a terminal: %w", err)
+	}
+	defer term.Restore(uintptr(inFD), baseline)
+	defer func() {
+		for fd, value := range flags {
+			_, _ = unix.FcntlInt(uintptr(fd), unix.F_SETFL, value)
+		}
+	}()
+	if err := unix.SetNonblock(inFD, true); err != nil {
+		return err
+	}
+	var gate sessionInputGate
+	input := make(chan sessionInput, 16)
+	inputDone := make(chan struct{})
+	go func() { defer close(inputDone); gate.read(ctx, inFD, input) }()
+	defer func() {
+		cancel()
+		<-inputDone
+		// No later attachment exists on exit; discard remaining physical input
+		// before restoring the caller's terminal discipline.
+		_ = unix.IoctlSetInt(inFD, unix.TCFLSH, unix.TCIFLUSH)
+	}()
+	resize := make(chan os.Signal, 1)
+	signal.Notify(resize, syscall.SIGWINCH)
+	defer signal.Stop(resize)
+	replies := make(chan sessionControlResult, 1)
+	busy, retry := false, false
+	var reports []sessionReport // At most ready + lost for the one current child.
+	var child *sessionTransport
+	var output <-chan sessionOutput
+	var done <-chan sessionTransportResult
+	var grant SessionGrant
+	proved, stopping := false, false
+	var startupOutput []byte
+	failure := ""
+	last := SessionControlReply{Reason: "Waiting for shared recovery"}
+	notice := ""
+	defer func() {
+		gate.close()
+		if child != nil {
+			child.stop()
+			<-child.done
+			child.input.Close()
+		}
+		_ = writeSessionTerminal(context.Background(), outFD, []byte("\x1b[?2004l\x1b[0m"))
+	}()
+	phase := func() sessionPhase {
+		if gate.current() != 0 {
+			return sessionReady
+		}
+		if child != nil {
+			return sessionConnecting
+		}
+		if last.Checking {
+			return sessionChecking
+		}
+		return sessionOffline
+	}
+	render := func() {
+		if phase() == sessionReady {
+			return
+		}
+		detail := notice
+		if detail == "" {
+			switch phase() {
+			case sessionConnecting:
+				detail = "Connecting — input is discarded"
+				if proved {
+					detail = "Discarding unfinished input before enabling attachment"
+				}
+			case sessionChecking:
+				detail = "Checking host…"
+			default:
+				detail = last.Reason
+				if detail == "" {
+					detail = "Waiting for attachment admission"
+				}
+			}
+			if child == nil && failure != "" {
+				detail = failure + "; " + detail
+			}
+			if !last.RetryAt.IsZero() {
+				detail += fmt.Sprintf("; retrying in %ds", max(0, int(time.Until(last.RetryAt).Seconds())+1))
+			}
+		}
+		// Bracketed paste lets the input gate retain the origin of a paste spanning
+		// readiness, instead of forwarding its tail as fresh typing.
+		_ = writeSessionTerminal(ctx, outFD, []byte(fmt.Sprintf("\x1b[0m\x1b[?2004h\x1b[2J\x1b[H%s / %s\r\n\r\n%s\r\n\r\nEnter to retry now\r\n", cfg.Remote.Host, cfg.Session, detail)))
+	}
+	send := func() {
+		if busy {
+			return
+		}
+		busy = true
+		m := request
+		m.Retry = retry
+		retry = false
+		if len(reports) > 0 {
+			m.Attempt = reports[0].attempt
+			m.Event = reports[0].event
+		}
+		go func() {
+			callCtx, stop := context.WithTimeout(ctx, time.Second)
+			defer stop()
+			reply, err := cfg.Control.Exchange(callCtx, m)
+			if callCtx.Err() != nil {
+				err = callCtx.Err()
+			}
+			select {
+			case replies <- sessionControlResult{m, reply, err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	lose := func() {
+		gate.close()
+		proved = false
+		stopping = true
+		startupOutput = nil
+		if child != nil {
+			child.stop()
+		}
+	}
+	open := func() {
+		if child == nil || stopping || !proved || gate.current() != 0 {
+			return
+		}
+		if !time.Now().Before(grant.Deadline) {
+			lose()
+			return
+		}
+		opened, err := gate.open(inFD)
+		if err != nil {
+			lose()
+		} else if opened {
+			// Keep the reconnect screen intact until both proof and an input
+			// boundary exist. Startup output is bounded and never treated as proof.
+			data := append([]byte("\x1b[0m\x1b[2J\x1b[H"), startupOutput...)
+			startupOutput = nil
+			if err := writeSessionTerminal(ctx, outFD, data); err != nil {
+				lose()
+				return
+			}
+			reports = append(reports, sessionReport{grant.Attempt, "ready"})
+			notice = ""
+			send()
+		}
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	render()
+	send()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case item, ok := <-input:
+			if !ok {
+				return fmt.Errorf("physical terminal closed")
+			}
+			current := gate.current()
+			if child != nil && current != 0 && item.generation == current {
+				if err := writeSessionTerminal(ctx, child.fd, item.data); err != nil {
+					lose()
+				}
+			} else if current == 0 && item.generation == 0 && !item.paste && bytesContainEnter(item.data) {
+				retry = true
+				notice = "Retry requested — checking host…"
+				render()
+				send()
+			}
+			open()
+		case <-resize:
+			if child != nil {
+				if size, err := unix.IoctlGetWinsize(inFD, unix.TIOCGWINSZ); err == nil {
+					_ = unix.IoctlSetWinsize(child.fd, unix.TIOCSWINSZ, size)
+				}
+			}
+		case packet := <-output:
+			if gate.current() != 0 {
+				if err := writeSessionTerminal(ctx, outFD, packet.data); err != nil {
+					lose()
+				}
+			} else if !stopping {
+				if len(startupOutput)+len(packet.data) > maxAttachmentFrame {
+					lose()
+				} else {
+					startupOutput = append(startupOutput, packet.data...)
+				}
+			}
+			for _, event := range packet.events {
+				if event == "ready" && !stopping {
+					proved = true
+				} else {
+					lose()
+				}
+			}
+			open()
+		case result := <-done:
+			gate.close()
+			child.stop()
+			child.input.Close()
+			child = nil
+			output = nil
+			done = nil
+			proved = false
+			startupOutput = nil
+			if result.outcome == "detached" {
+				return nil
+			}
+			reports = append(reports, sessionReport{grant.Attempt, "lost"})
+			failure = "Connection lost"
+			if result.outcome != "" {
+				failure += " (" + result.outcome + ")"
+			}
+			notice = ""
+			render()
+			send()
+		case result := <-replies:
+			busy = false
+			if result.err != nil {
+				retry = retry || result.request.Retry
+				notice = "Shared recovery unavailable"
+				render()
+				continue
+			}
+			if result.request.Event != "" && len(reports) > 0 && reports[0] == (sessionReport{result.request.Attempt, result.request.Event}) {
+				reports = reports[1:]
+				if result.request.Event == "lost" {
+					grant = SessionGrant{}
+					if err := freshAttempt(); err != nil {
+						return err
+					}
+				}
+			}
+			last = result.reply
+			notice = ""
+			if last.Ended {
+				return nil
+			}
+			if last.Reset && gate.current() == 0 {
+				if child != nil {
+					lose()
+				} else if len(reports) == 0 {
+					grant = SessionGrant{}
+				}
+			}
+			if g := last.Grant; g != nil && !last.Reset && result.request.Event == "" && child == nil && len(reports) == 0 && grant.Attempt == "" && g.Attempt == request.Attempt && validAttachmentAttempt(g.Attempt) {
+				if !time.Now().Before(g.Deadline) {
+					reports = append(reports, sessionReport{g.Attempt, "lost"})
+					send()
+					continue
+				}
+				command, e := PlanSessionAttachment(cfg.Remote, cfg.Session, cfg.SessionID, g.Attempt)
+				if e != nil {
+					return e
+				}
+				grant = *g
+				failure = ""
+				startupOutput = nil
+				stopping = false
+				proved = false
+				child, e = startSessionTransport(ctx, command, g.Attempt, inFD)
+				if e != nil {
+					failure = "Cannot start attachment: " + e.Error()
+					reports = append(reports, sessionReport{grant.Attempt, "lost"})
+				} else {
+					output = child.output
+					done = child.done
+				}
+			}
+			render()
+			if len(reports) > 0 || retry {
+				send()
+			}
+		case <-ticker.C:
+			if child != nil && gate.current() == 0 && !time.Now().Before(grant.Deadline) {
+				lose()
+			}
+			open()
+			render()
+			send()
+		}
+	}
+}
+
+func bytesContainEnter(data []byte) bool { return strings.ContainsAny(string(data), "\r\n") }

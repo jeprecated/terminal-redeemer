@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const attachmentMarkerPrefix = "\x1eREDEEM_ATTACH_V1:"
+
 var attachmentAttemptPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 func validAttachmentAttempt(attempt string) bool {
@@ -32,7 +34,7 @@ func AttachmentMarker(attempt, event string) string {
 	}
 	switch event {
 	case "ready", "detached", "missing", "replaced", "unverifiable", "unsupported", "invalid", "failed", "cancelled":
-		return "\x1eREDEEM_ATTACH_V1:" + attempt + ":" + event + "\x1f"
+		return attachmentMarkerPrefix + attempt + ":" + event + "\x1f"
 	default:
 		return ""
 	}
