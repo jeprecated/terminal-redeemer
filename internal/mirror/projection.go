@@ -27,6 +27,9 @@ type ProjectionInventory struct {
 	Untracked           []OwnedWindow
 	Ambiguous           []OwnedWindow
 	AmbiguousCandidates map[int][]Projection
+	// Unverified windows are also untracked: their inspection failed, so an
+	// offline helper or other projection beneath them cannot be ruled out.
+	Unverified []OwnedWindow
 }
 
 type ProjectionEvidenceConfig struct {
@@ -54,6 +57,7 @@ func InspectProjections(ctx context.Context, windows []OwnedWindow, cfg Projecti
 				return ProjectionInventory{}, err
 			}
 			inventory.Untracked = append(inventory.Untracked, window)
+			inventory.Unverified = append(inventory.Unverified, window)
 			continue
 		}
 		switch len(matches) {

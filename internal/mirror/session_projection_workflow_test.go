@@ -66,3 +66,38 @@ func TestSupervisedPresenceSavesAndDeduplicatesRegardlessOfReadiness(t *testing.
 		}
 	}
 }
+
+func TestApplyNeverDuplicatesUnverifiedHelperWindow(t *testing.T) {
+	root := t.TempDir()
+	remote := RemoteConfig{Host: "lattice", SSHCommand: "ssh", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}}
+	r := recoveryRequest(0)
+	// Opened with a --self-command override the inspecting config cannot verify.
+	argv, err := sessionSupervisorArgv("/home/u/dev/redeem", remote, r.Session, r.SessionID, r.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeMirrorProc(t, root, 100, 1, 10, []string{"kitty"})
+	writeMirrorProc(t, root, 101, 100, 11, argv)
+	writeMirrorProc(t, root, 200, 1, 20, []string{"kitty"})
+	windows := []OwnedWindow{{ID: 1, PID: 100}, {ID: 2, PID: 200}}
+	inventory, err := InspectProjections(context.Background(), windows, ProjectionEvidenceConfig{ProcRoot: root, SelfCommand: "redeem", SSHCommand: "ssh"})
+	if err != nil || len(inventory.Untracked) != 2 || len(inventory.Unverified) != 1 || inventory.Unverified[0].ID != 1 {
+		t.Fatalf("unverified helper not distinguished from plain window: %+v %v", inventory, err)
+	}
+	snapshot := activeSnapshot("lattice", r.Session)
+	snapshot.SessionIDs = map[string]string{r.Session: r.SessionID}
+	cfg := applyTestConfig(t, testPin(r.Session), snapshot)
+	runner := &pinRunner{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := ApplyPinned(ctx, cfg, ApplyDeps{Runner: runner, ListWindows: func(context.Context) ([]OwnedWindow, error) { return windows, nil }, Workspaces: func(context.Context) ([]OwnedWorkspace, error) { return nil, nil }, Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
+		return inventory, nil
+	}})
+	if err != nil || len(result.Items) != 1 || result.Items[0].Status != ApplyAmbiguous || len(runner.commands) != 0 {
+		t.Fatalf("apply launched beside an unverified helper: %+v %v %+v", result, err, runner.commands)
+	}
+	plain := ProjectionInventory{Untracked: []OwnedWindow{windows[1]}}
+	if applied := prepareApply(testPin(r.Session), activeSet(r.Session), plain, nil); applied.Items[0].Status != ApplyReady {
+		t.Fatalf("plain untracked window blocked apply: %+v", applied)
+	}
+}

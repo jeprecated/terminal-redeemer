@@ -256,6 +256,10 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			item.Status, item.Reason = ApplyAmbiguous, "ambiguous owned window contains matching projection evidence"
 			continue
 		}
+		if len(beforeInventory.Unverified) > 0 {
+			item.Status, item.Reason = ApplyAmbiguous, unverifiedProjectionReason
+			continue
+		}
 		switch len(matching) {
 		case 0:
 		case 1:
@@ -338,6 +342,8 @@ func prepareApply(pin Pin, active map[string]struct{}, inventory ProjectionInven
 			item.Status, item.Reason = ApplyMissing, "exact ACTIVE source session is unavailable"
 		case hasAmbiguousCandidate(inventory, pin.SourceHost, pinned.Session, ""):
 			item.Status, item.Reason = ApplyAmbiguous, "ambiguous owned window contains matching projection evidence"
+		case len(inventory.Unverified) > 0:
+			item.Status, item.Reason = ApplyAmbiguous, unverifiedProjectionReason
 		case open[pinned.Session] > 1:
 			item.Status, item.Reason = ApplyAmbiguous, "multiple exact projections are already open"
 		case open[pinned.Session] == 1:
@@ -354,6 +360,8 @@ func prepareApply(pin Pin, active map[string]struct{}, inventory ProjectionInven
 	}
 	return result
 }
+
+const unverifiedProjectionReason = "an owned window's projection evidence could not be verified; it may already project this session"
 
 func hasAmbiguousCandidate(inventory ProjectionInventory, host, session, token string) bool {
 	for _, candidates := range inventory.AmbiguousCandidates {
