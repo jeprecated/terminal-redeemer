@@ -393,6 +393,11 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 					lose()
 				} else if len(reports) == 0 {
 					grant = SessionGrant{}
+					// A grant reply lost to a timeout or suspend leaves the
+					// coordinator holding this attempt; release it explicitly.
+					if last.CancelAttempt == request.Attempt {
+						reports = append(reports, sessionReport{request.Attempt, "lost"})
+					}
 				}
 			}
 			if g := last.Grant; g != nil && !last.Reset && result.request.Event == "" && child == nil && len(reports) == 0 && grant.Attempt == "" && g.Attempt == request.Attempt && validAttachmentAttempt(g.Attempt) {

@@ -206,6 +206,12 @@ type testSessionTerminal struct {
 
 func sessionTerminalFixture(t *testing.T) *testSessionTerminal {
 	t.Helper()
+	return sessionTerminalFixtureWith(t, nil)
+}
+
+// sessionTerminalFixtureWith replaces the scripted control with another seam.
+func sessionTerminalFixtureWith(t *testing.T, control SessionControl) *testSessionTerminal {
+	t.Helper()
 	root := t.TempDir()
 	t.Setenv("REDEEM_TEST_SESSION_TRANSPORT", root)
 	ssh := filepath.Join(root, "ssh")
@@ -247,6 +253,9 @@ func sessionTerminalFixture(t *testing.T) *testSessionTerminal {
 		t.Fatal(err)
 	}
 	cfg := SessionSupervisorConfig{Remote: h.remote, Session: "original", SessionID: zellijlive.SessionID("boot", "original", 1, 1), Token: "0123456789abcdef0123456789abcdef", Input: slave, Output: slave, Control: h.control, Local: local}
+	if control != nil {
+		cfg.Control = control
+	}
 	go func() { h.done <- RunSessionSupervisor(ctx, cfg); close(h.done) }()
 	t.Cleanup(func() {
 		cancel()
