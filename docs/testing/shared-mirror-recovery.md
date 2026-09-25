@@ -23,7 +23,9 @@ planning remains unchanged until workflow and asynchronous clipboard integration
   1, 2, 4, 8, 16, then 30 seconds indefinitely. Enter requests coalesce with
   in-flight checks and have a one-second minimum start interval.
 - Two pending attachment slots, fair rotation, session-specific failure delay,
-  immutable client identity and attempt-bound grants. Expiry requests exact
+  immutable client identity and attempt-bound grants. Older connecting/status
+  messages cannot revoke a replacement, and expiry is sticky across clock
+  rollback. Expiry requests exact
   attempt cancellation but retains capacity until reap acknowledgement. Two
   helper-held kernel slot locks additionally enforce the physical pending limit
   across coordinator restart; release follows actual readiness or child reap.
@@ -68,12 +70,19 @@ session is used. Real pinned-Zellij tests use a fixture-only single-key Detach
 binding: batching Ctrl-o and d races its asynchronous mode switch and does not
 reliably request a detach. The readiness/incarnation assertions are unchanged.
 
-Validation commands (record results in the implementation plan after completion):
+Full Go tests, targeted races, three combined supervisor/source-Zellij/recovery
+repetitions (no skips), vet, and ten extra thirty-process race repetitions passed.
+Fixtures reconnect transiently dropped idle status connections rather than
+mistaking an unknown reply for a zero-member observation. PID liveness polling
+retries EINTR and rejects closed descriptors; neither is process-death evidence.
+A local Nix package build passed; final build status is in the implementation plan.
+
+Validation commands:
 
 ```sh
 go test ./...
 go test -race ./internal/mirror ./cmd/redeem
-go test -race ./internal/mirror -run '^Test(SessionRecovery(ThirtyProcessesShareBlockedProbe|StaleSocketAndIdentityIsolation|RejectsDeadPeerWithRetainedSocket|ControlDisconnectRetainsPendingCapacity|RestartPreservesProbeAndPendingBounds)|RealPinnedZellij)' -v -count=3
+go test -race ./internal/mirror -run '^Test(SessionRecovery(ThirtyProcessesShareBlockedProbe|StaleSocketAndIdentityIsolation|RejectsDeadPeerWithRetainedSocket|ControlDisconnectRetainsPendingCapacity|RestartPreservesProbeAndPendingBounds)|SessionSupervisor|RealPinnedZellij)' -v -count=3
 go vet ./...
 ```
 

@@ -249,10 +249,16 @@ func TestSessionRecoveryThirtyProcessesShareBlockedProbe(t *testing.T) {
 	}
 	awaitSession(t, func() bool { s, ok := recoveryStatus(t, statusClient); return ok && s.Available && s.Pending == 2 })
 	time.Sleep(200 * time.Millisecond)
-	s, _ := recoveryStatus(t, statusClient)
-	if s.Pending != 2 || s.Ready != 0 {
-		t.Fatalf("unbounded attachment admission: %+v", s)
-	}
+	awaitSession(t, func() bool {
+		s, ok := recoveryStatus(t, statusClient)
+		if !ok {
+			return false
+		} // a dropped status connection is not a zero-valued observation
+		if s.Pending != 2 || s.Ready != 0 {
+			t.Fatalf("unexpected attachment admission: %+v", s)
+		}
+		return true
+	})
 	if err := os.WriteFile(filepath.Join(root, "ready"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -169,15 +169,22 @@ func (s *sessionRecovery) exchange(r SessionControlRequest, now time.Time) (Sess
 		s.requestProbe(now)
 	}
 	s.expire(now)
+	if m.active != "" && r.Attempt != m.active {
+		// Resynchronize a stale caller without mutating the live attempt,
+		// including status/connecting messages older than the last retirement.
+		return s.reply(m, now, true), nil
+	}
 	if r.Event != "" {
 		switch {
 		case r.Event == "lost" && r.Attempt == m.retired:
 			// Acknowledge replay or the reap following a coordinator restart.
-			m.reset = false
+			if m.active == "" {
+				m.reset = false
+			}
 		case r.Attempt != m.active || m.active == "":
 			return s.reply(m, now, true), nil
 		case r.Event == "ready":
-			if !m.ready && !now.Before(m.deadline) {
+			if !m.ready && (m.reset || !now.Before(m.deadline)) {
 				return s.reply(m, now, true), nil
 			}
 			m.ready = true
@@ -190,7 +197,7 @@ func (s *sessionRecovery) exchange(r SessionControlRequest, now time.Time) (Sess
 	} else if m.active == "" && !m.reset && r.Attempt != m.retired {
 		m.proposed = r.Attempt
 	}
-	if r.State == string(sessionConnecting) && m.active != r.Attempt {
+	if r.State == string(sessionConnecting) && m.active != r.Attempt && r.Attempt != m.retired {
 		m.reset = true
 	}
 	s.admit(now)

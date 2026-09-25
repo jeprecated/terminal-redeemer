@@ -8,7 +8,25 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestSessionRecoveryClosedPIDFDIsNotLive(t *testing.T) {
+	fd, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := os.NewFile(uintptr(fd), "self-pidfd")
+	defer file.Close()
+	if !recoveryPeerAlive(file) {
+		t.Fatal("live self pidfd rejected")
+	}
+	file.Close()
+	if recoveryPeerAlive(file) || recoveryPeerAlive(nil) {
+		t.Fatal("closed descriptor treated as live process")
+	}
+}
 
 func TestSessionRecoverySocketOwnerProcess(t *testing.T) {
 	root := os.Getenv("REDEEM_TEST_RECOVERY")

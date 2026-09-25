@@ -167,9 +167,23 @@ func recoveryPeer(conn *net.UnixConn) (int, *os.File, error) {
 	return int(cred.Pid), os.NewFile(uintptr(pidfd), "recovery-peer"), nil
 }
 func recoveryPeerAlive(fd *os.File) bool {
-	p := []unix.PollFd{{Fd: int32(fd.Fd()), Events: unix.POLLIN}}
-	n, err := unix.Poll(p, 0)
-	return err == nil && n == 0
+	if fd == nil {
+		return false
+	}
+	value := fd.Fd()
+	if value == ^uintptr(0) {
+		return false
+	}
+	p := []unix.PollFd{{Fd: int32(value), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(p, 0)
+		// Go's async-preemption signal can interrupt even a zero-time poll.
+		// EINTR is not process-death evidence (nor a reason to free a slot).
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		return err == nil && n == 0
+	}
 }
 func readRecoveryFrame(reader *bufio.Reader, target any) error {
 	data, err := reader.ReadSlice('\n')

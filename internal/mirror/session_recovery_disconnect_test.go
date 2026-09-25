@@ -25,12 +25,16 @@ func TestSessionRecoveryControlDisconnectRetainsPendingCapacity(t *testing.T) {
 	})
 	exchange := func(i int) SessionControlReply {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		reply, err := clients[i].Exchange(ctx, recoveryRequest(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		var reply SessionControlReply
+		// Unlike production helpers, idle fixture clients do not heartbeat.
+		// Reconnect after the server's bounded idle-read deadline as they do.
+		awaitSession(t, func() bool {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var err error
+			reply, err = clients[i].Exchange(ctx, recoveryRequest(i))
+			return err == nil
+		})
 		return reply
 	}
 	for i := range clients {
