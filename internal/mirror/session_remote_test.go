@@ -31,6 +31,9 @@ func TestSessionCatalogPreservesPrefixAndForcesUnattendedSSH(t *testing.T) {
 	if !reflect.DeepEqual(command.Args[:4], []string{"-o", "BatchMode=yes", "-o", "ConnectionAttempts=1"}) {
 		t.Fatalf("retry policy not first: %+v", command)
 	}
+	if !reflect.DeepEqual(command.Args[10:14], []string{"-o", "ControlMaster=no", "-o", "ControlPath=none"}) {
+		t.Fatalf("connection sharing not disabled before configured options: %+v", command)
+	}
 	ssh, err := exec.LookPath("ssh")
 	if err != nil {
 		t.Skip("OpenSSH unavailable; argv checks passed")
@@ -42,10 +45,13 @@ func TestSessionCatalogPreservesPrefixAndForcesUnattendedSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, option := range []string{"batchmode yes", "connectionattempts 1", "connecttimeout 5", "serveraliveinterval 5", "serveralivecountmax 2", "requesttty false", "stdinnull yes"} {
+	for _, option := range []string{"batchmode yes", "connectionattempts 1", "connecttimeout 5", "serveraliveinterval 5", "serveralivecountmax 2", "requesttty false", "stdinnull yes", "controlmaster false"} {
 		if !strings.Contains(string(output), option+"\n") {
 			t.Fatalf("missing effective option %q: %s", option, output)
 		}
+	}
+	if strings.Contains(string(output), "\ncontrolpath ") {
+		t.Fatalf("shared control socket still configured: %s", output)
 	}
 }
 

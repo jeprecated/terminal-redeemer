@@ -37,7 +37,9 @@ func PlanSessionCatalog(cfg RemoteConfig) (Command, error) {
 }
 
 func unattendedSSHOptions() []string {
-	return []string{"-o", "BatchMode=yes", "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"}
+	// A shared ControlMaster connection would bypass these bounds and keepalives,
+	// and may be dead after suspend while still accepting new sessions.
+	return []string{"-o", "BatchMode=yes", "-o", "ConnectionAttempts=1", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "-o", "ControlMaster=no", "-o", "ControlPath=none"}
 }
 
 // AcquireSessionInventory is an observation, never an attach/create operation.
