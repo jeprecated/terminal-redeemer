@@ -87,9 +87,6 @@ func (s *sessionRecovery) finishProbe(sequence uint64, now time.Time, inventory 
 	if err == nil {
 		err = inventory.validate()
 	}
-	if err == nil && !s.inventory.GeneratedAt.IsZero() && !inventory.GeneratedAt.After(s.inventory.GeneratedAt) {
-		err = fmt.Errorf("stale session inventory")
-	}
 	s.checking = false
 	if err != nil {
 		s.available = false

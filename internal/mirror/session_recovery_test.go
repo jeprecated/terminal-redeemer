@@ -167,13 +167,15 @@ func TestSessionRecoveryOnlyFreshCompleteScopedEvidenceEnds(t *testing.T) {
 	if s.members[b.Client].ended {
 		t.Fatal("incomplete inventory ended member")
 	}
-	now = now.Add(time.Second)
-	seq, _ = s.beginProbe(now)
-	s.finishProbe(seq, now, recoveryInventory(time.Unix(10000, 0)), nil)
-	if s.members[b.Client].ended {
-		t.Fatal("old timestamp ended member")
-	}
+	// Source wall time may step backwards (reboot, NTP); sequence alone orders.
 	now = s.nextProbe
+	seq, _ = s.beginProbe(now)
+	s.finishProbe(seq, now, recoveryInventory(time.Unix(1, 0), b), nil)
+	if !s.available || s.members[b.Client].ended {
+		t.Fatal("earlier source clock rejected a current observation")
+	}
+	now = now.Add(time.Second)
+	s.requestProbe(now)
 	seq, _ = s.beginProbe(now)
 	s.finishProbe(seq, now, recoveryInventory(now), nil)
 	if !s.members[b.Client].ended {
