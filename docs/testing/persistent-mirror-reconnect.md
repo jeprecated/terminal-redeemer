@@ -32,10 +32,30 @@ There is no unqualified late Kitty `send-text` in the supervised mapping.
 
 ## Automated evidence
 
-Completed component gates: full Go suites, mirror/procmeta/Zellij/CLI races,
-vet, repeated real PTY and pinned-Zellij tests, and local Nix builds. Final
-post-cutover comprehensive gates are pending at this document's initial commit;
-results will be recorded below after completion.
+Final code revision **`d51b4e074f28`** passed the complete post-cutover gate:
+
+```sh
+go test ./...
+go test -race ./internal/mirror ./internal/procmeta ./internal/zellijlive ./cmd/redeem
+go test -race ./internal/mirror -run '^Test(SessionRecovery(ThirtyProcessesShareBlockedProbe|StaleSocketAndIdentityIsolation|RejectsDeadPeerWithRetainedSocket|ControlDisconnectRetainsPendingCapacity|RestartPreservesProbeAndPendingBounds)|SessionSupervisor|RealPinnedZellij|SessionLocalOrigin|PasteBridgeUpload|SessionInputPaste|SessionGate|SessionTerminalWrite)' -v -count=3
+go vet ./...
+nix build .#terminal-redeemer --no-link --builders '' --max-jobs 1 --cores 2
+```
+
+The sequential Go/race/repetition/vet process (`proc_891a`) exited 0 after
+187 seconds. Its verbose repetition log contains no skipped source tests or race
+warnings; all five real pinned-Zellij cases, including creation receipt/attachment,
+ran three times. The local Nix build (`proc_092c`) exited 0 after 60 seconds,
+building `/nix/store/d4q9mq1crbhvnjq8zsh86vx7sd568wzq-terminal-redeemer-0.1.0.drv`.
+The earlier ownership component also passed its complete Go/race/vet and local
+Nix gates before public cutover. Vendor dependencies/hash are unchanged from the
+validated PTY foundation.
+
+Transient control-socket reset during the thirty-process idle transition was
+logged and correctly treated as unknown/retried, never as zero members or end
+evidence. All assertions passed. Main-to-feature file-scope review confirmed no
+retired slice/controller packages, services or unrelated checkpoint/ADR 0003
+changes. Final follow-up changes only record this validation evidence.
 
 | Invariant | Regression/evidence |
 | --- | --- |
