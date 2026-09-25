@@ -70,6 +70,28 @@ transport isolation, duplicate binding and origin checks against a real PTY.
 after reconnect and proves both its image path and delayed Ctrl-V fallback are
 rejected; fresh fallback succeeds and temporary image data is cleaned up.
 
+## Offline ownership integration
+
+Projection inspection now retains complete process/parent/start-time evidence,
+checks a supervisor's deterministic argv and local IPC peer identity, then
+rechecks the tree after IPC. It recognizes configured and same-directory Nix
+wrapped helpers; a helper's SSH descendants are not second projections. Two
+helpers remain ambiguous, and partial/unreadable or PID-replaced observations
+cannot leak earlier matches. Legacy direct-SSH evidence remains supported.
+
+`Projection.Supervised`, `SessionID` and `Ready` separate incarnation/presence
+from current input readiness. Save accepts connected or offline supervised views
+only when their incarnation matches a fresh source snapshot; mismatch or missing
+identity fails instead of replacing the pin with a name-only interpretation.
+Apply/follow treat either ready or offline verified helpers as already present.
+Selection, manual-close policy, lifetime caps and follow's lock remain unchanged.
+
+The helper-local/clipboard boundary passed full Go tests, targeted races, three
+PTY/clipboard repetitions, vet and a local Nix build. Ownership integration has
+separate complete-tree, wrapper, ambiguous-helper, foreign-peer, PID-reuse and
+connected/offline save/deduplication regressions. Public launches are still direct
+SSH until the remaining launch and create-once integration is complete.
+
 ## Terminal and process lifecycle
 
 - Raw mode and original descriptor flags are saved and restored. Physical input

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
@@ -13,10 +14,12 @@ import (
 // configured SSH destination and case-sensitive Zellij session. Titles are
 // presentation only and are deliberately not consulted.
 type Projection struct {
-	Window           OwnedWindow
-	SourceHost       string
-	Session          string
-	CorrelationToken string
+	Window            OwnedWindow
+	SourceHost        string
+	Session           string
+	CorrelationToken  string
+	SessionID         string
+	Supervised, Ready bool
 }
 
 type ProjectionInventory struct {
@@ -27,9 +30,13 @@ type ProjectionInventory struct {
 }
 
 type ProjectionEvidenceConfig struct {
-	ProcRoot   string
-	SSHCommand string
-	SSHOptions []string
+	ProcRoot        string
+	SSHCommand      string
+	SSHOptions      []string
+	SelfCommand     string
+	SnapshotCommand []string
+	RuntimeDir      string
+	localState      func(context.Context, RemoteConfig, string) (SessionLocalState, int, error)
 }
 
 // InspectProjections evaluates each owned window exactly once. Vanished or
@@ -66,16 +73,53 @@ func inspectProjectionWindow(ctx context.Context, window OwnedWindow, cfg Projec
 	if window.ID <= 0 || window.PID <= 0 {
 		return nil, nil
 	}
+	processes, err := procmeta.ObserveDescendantProcesses(ctx, cfg.ProcRoot, window.PID)
+	if err != nil {
+		return nil, err
+	}
 	matches := make([]Projection, 0, 1)
-	_, err := procmeta.DescendantArgvMatchContext(ctx, cfg.ProcRoot, window.PID, func(argv []string) bool {
-		host, session, token, ok := parseProjectionSSHArgv(argv, cfg.SSHCommand, cfg.SSHOptions)
+	helpers := map[int]bool{}
+	parents := map[int]int{}
+	for _, process := range processes {
+		parents[process.PID] = process.ParentPID
+		argv := process.Args
+		if len(argv) >= 3 && argv[1] == "mirror" && argv[2] == "session-supervisor" {
+			projection, err := inspectSupervisor(ctx, argv, process.PID, window, cfg)
+			if err != nil {
+				return nil, err
+			}
+			matches = append(matches, projection)
+			helpers[process.PID] = true
+		}
+	}
+	for _, process := range processes {
+		underHelper := false
+		for parent := process.ParentPID; parent != 0 && parent != window.PID; parent = parents[parent] {
+			if helpers[parent] {
+				underHelper = true
+				break
+			}
+		}
+		if underHelper {
+			continue
+		}
+		host, session, token, ok := parseProjectionSSHArgv(process.Args, cfg.SSHCommand, cfg.SSHOptions)
 		if ok {
 			matches = append(matches, Projection{Window: window, SourceHost: host, Session: session, CorrelationToken: token})
 		}
-		// Walk the complete descendant set so multiple candidates fail closed.
-		return false
-	})
-	return matches, err
+	}
+	if len(helpers) > 0 {
+		// IPC supplied live pidfd authority. Recheck proc identities after that
+		// exchange so a reused numeric PID cannot adopt earlier ancestry.
+		after, err := procmeta.ObserveDescendantProcesses(ctx, cfg.ProcRoot, window.PID)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(processes, after) {
+			return nil, errors.New("projection process tree changed during helper observation")
+		}
+	}
+	return matches, nil
 }
 
 // parseProjectionSSHArgv accepts only the complete deterministic SSH argv

@@ -279,6 +279,8 @@ type FollowConfig struct {
 	SSHCommand       string
 	SSHOptions       []string
 	LauncherCommand  string
+	SelfCommand      string
+	SnapshotCommand  []string
 	AppID            string
 	NiriCommand      string
 	Timeout          time.Duration
@@ -404,7 +406,7 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 	// This is the single full-poll safety gate. No launch effect is attempted
 	// until source, local evidence, destination, every token, and every launch
 	// plan have all validated successfully.
-	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions}
+	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, SelfCommand: cfg.SelfCommand, SnapshotCommand: cfg.SnapshotCommand}
 	beforeWindows, inventory, err := observeFollow(ctx, deps, evidence)
 	if err != nil {
 		result.Reason = "local projection evidence unavailable: " + err.Error()

@@ -24,6 +24,20 @@ type SessionLocalState struct {
 	Origin                                      SessionInputOrigin
 }
 
+func validSessionLocalState(state SessionLocalState) bool {
+	if !validSessionID(state.SessionID) || ValidateSession(state.Session) != nil || !validAttachmentAttempt(state.Origin.Client) {
+		return false
+	}
+	switch sessionPhase(state.State) {
+	case sessionReady:
+		return state.Origin.Generation != 0 && validAttachmentAttempt(state.Origin.Attempt)
+	case sessionOffline, sessionChecking, sessionConnecting:
+		return state.Origin.Generation == 0
+	default:
+		return false
+	}
+}
+
 type sessionLocalWire struct {
 	Version int
 	Origin  *SessionInputOrigin `json:",omitempty"`
@@ -225,7 +239,7 @@ func SessionLocalExchange(ctx context.Context, remote RemoteConfig, runtime, tok
 	if err != nil {
 		return SessionLocalState{}, 0, err
 	}
-	if reply.State == nil || reply.State.Transport != identity || reply.State.Token != token {
+	if reply.State == nil || !validSessionLocalState(*reply.State) || reply.State.Transport != identity || reply.State.Token != token {
 		return SessionLocalState{}, 0, fmt.Errorf("terminal identity changed")
 	}
 	return *reply.State, pid, nil

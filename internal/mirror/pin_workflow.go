@@ -63,6 +63,15 @@ func BuildPin(snapshot Snapshot, sourceHost string, windows []OwnedWindow, works
 			ambiguous++
 			continue
 		}
+		if projection.Supervised {
+			id, err := snapshot.ExactSessionID(projection.Session)
+			if err != nil {
+				return SaveResult{}, err
+			}
+			if id != projection.SessionID {
+				return SaveResult{}, fmt.Errorf("projection %q no longer matches fresh source incarnation", projection.Session)
+			}
+		}
 		source, found := sources[projection.Session]
 		if !found {
 			continue
@@ -128,6 +137,8 @@ type ApplyConfig struct {
 	SSHCommand      string
 	SSHOptions      []string
 	LauncherCommand string
+	SelfCommand     string
+	SnapshotCommand []string
 	AppID           string
 	NiriCommand     string
 	StateDir        string
@@ -180,7 +191,7 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 	if deps.Sleep == nil {
 		deps.Sleep = sleepContext
 	}
-	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions}
+	evidence := ProjectionEvidenceConfig{SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, SelfCommand: cfg.SelfCommand, SnapshotCommand: cfg.SnapshotCommand}
 
 	store, err := OpenPinStore(cfg.StateDir)
 	if err != nil {

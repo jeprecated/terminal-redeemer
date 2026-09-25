@@ -579,7 +579,7 @@ func runMirrorSave(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
 	}
-	inventory, err := mirror.InspectProjections(ctx, windows, mirror.ProjectionEvidenceConfig{SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values})
+	inventory, err := mirror.InspectProjections(ctx, windows, mirror.ProjectionEvidenceConfig{SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values, SelfCommand: resolvedConfig.Mirror.SelfCommand, SnapshotCommand: source.snapshotCommand.values})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror save failed: %v\n", err)
 		return 1
@@ -644,6 +644,7 @@ func runMirrorApply(args []string, resolvedConfig config.Config, stdout io.Write
 	runner := mirror.ExecRunner{}
 	result, err := mirror.ApplyPinned(ctx, mirror.ApplyConfig{
 		Snapshot: snapshot, SourceHost: host, SSHCommand: *source.sshCommand,
+		SelfCommand: resolvedConfig.Mirror.SelfCommand, SnapshotCommand: source.snapshotCommand.values,
 		SSHOptions: source.sshOptions.values, LauncherCommand: *launcher, AppID: *appID,
 		NiriCommand: *niriCommand, StateDir: *stateDir, Timeout: *timeout, PollInterval: *pollInterval, DryRun: *dryRun,
 	}, mirror.ApplyDeps{Runner: runner})
@@ -727,6 +728,7 @@ func runMirrorFollow(args []string, resolvedConfig config.Config, stdout io.Writ
 	selection := mirror.SelectionForWorkspace(choice.Workspace)
 	cfg := mirror.FollowConfig{
 		SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
+		SelfCommand: resolvedConfig.Mirror.SelfCommand, SnapshotCommand: source.snapshotCommand.values,
 		LauncherCommand: *launcher, AppID: *appID, NiriCommand: *niriCommand,
 		Timeout: *timeout, EvidenceInterval: *evidenceInterval, MaxPerPoll: *maxPerPoll, MaxTotal: *maxTotal,
 	}
