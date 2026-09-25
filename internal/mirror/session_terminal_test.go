@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/creack/pty"
@@ -44,5 +45,44 @@ func TestSessionGateDoesNotFlushUnreadPasteStart(t *testing.T) {
 	gate.close()
 	if opened, err := gate.open(fd); err != nil || !opened || gate.current() != 2 {
 		t.Fatalf("generation reused: %v %v %d", opened, err, gate.current())
+	}
+}
+
+func TestSessionGateReleasesLoneEscape(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer slave.Close()
+	fd := int(slave.Fd())
+	if _, err := term.MakeRaw(uintptr(fd)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSessionTerminal(context.Background(), int(master.Fd()), []byte("\x1b")); err != nil {
+		t.Fatal(err)
+	}
+	// Offline Escape cannot keep readiness closed; it is discarded, not held.
+	var gate sessionInputGate
+	if opened, err := gate.open(fd); err != nil || opened {
+		t.Fatalf("fresh prefix admitted readiness: %v %v", opened, err)
+	}
+	time.Sleep(sessionPrefixTimeout)
+	if opened, err := gate.open(fd); err != nil || !opened || len(gate.prefix) != 0 {
+		t.Fatalf("lone Escape blocked readiness: %v %v", opened, err)
+	}
+	// While ready, a lone Escape is released alone with the current origin.
+	gate.mu.Lock()
+	items := gate.decode([]byte("\x1b"))
+	gate.mu.Unlock()
+	if len(items) != 0 {
+		t.Fatalf("escape released before timeout: %+v", items)
+	}
+	if early := gate.flushPrefix(time.Now()); early != nil {
+		t.Fatalf("escape released early: %+v", early)
+	}
+	items = gate.flushPrefix(time.Now().Add(sessionPrefixTimeout))
+	if len(items) != 1 || string(items[0].data) != "\x1b" || items[0].generation != gate.current() || items[0].paste {
+		t.Fatalf("escape not released with its origin: %+v", items)
 	}
 }

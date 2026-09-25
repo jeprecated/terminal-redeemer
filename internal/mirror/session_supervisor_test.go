@@ -529,3 +529,16 @@ func TestSessionInputPasteKeepsOriginAcrossEverySplit(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionSupervisorForwardsLoneEscapeWhenReady(t *testing.T) {
+	h := sessionTerminalFixture(t)
+	h.write(t, "\x1b")
+	h.control.change(func() { h.control.permits = 1 })
+	attempt := h.control.attempt(t, 1)
+	h.ready(t, attempt)
+	h.write(t, "\x1b")
+	awaitSession(t, func() bool { return h.received(attempt) == "\x1b" })
+	time.Sleep(100 * time.Millisecond)
+	h.write(t, "j")
+	awaitSession(t, func() bool { return h.received(attempt) == "\x1bj" })
+}

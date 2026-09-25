@@ -29,6 +29,20 @@ type sessionInputGate struct {
 	pasteGeneration  uint64
 	prefix           []byte
 	prefixGeneration uint64
+	prefixAt         time.Time
+}
+
+// Terminals emit a paste marker's bytes together. A held prefix without prompt
+// continuation, such as a lone Escape, is ordinary input from its origin.
+const sessionPrefixTimeout = 30 * time.Millisecond
+
+func (g *sessionInputGate) flushPrefix(now time.Time) []sessionInput {
+	if len(g.prefix) == 0 || now.Sub(g.prefixAt) < sessionPrefixTimeout {
+		return nil
+	}
+	item := sessionInput{g.prefixGeneration, g.prefix, g.paste}
+	g.prefix = nil
+	return []sessionInput{item}
 }
 
 func (g *sessionInputGate) close()          { g.mu.Lock(); g.generation = 0; g.mu.Unlock() }
@@ -63,6 +77,7 @@ func (g *sessionInputGate) open(fd int) (bool, error) {
 			return false, errors.New("physical terminal closed")
 		}
 	}
+	_ = g.flushPrefix(time.Now())
 	if !empty || g.paste || len(g.prefix) > 0 {
 		return false, nil
 	}
@@ -90,6 +105,7 @@ func (g *sessionInputGate) decode(data []byte) []sessionInput {
 		}
 		if len(g.prefix) == 0 {
 			g.prefixGeneration = epoch
+			g.prefixAt = time.Now()
 		}
 		g.prefix = append(g.prefix, b)
 		for len(g.prefix) > 0 {
@@ -120,36 +136,42 @@ func (g *sessionInputGate) read(ctx context.Context, fd int, input chan<- sessio
 	defer close(input)
 	buf := make([]byte, 4096)
 	for ctx.Err() == nil {
+		timeout := 50
+		g.mu.Lock()
+		if len(g.prefix) > 0 {
+			timeout = 10
+		}
+		g.mu.Unlock()
 		poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-		n, err := unix.Poll(poll, 50)
+		ready, err := unix.Poll(poll, timeout)
 		if err == unix.EINTR {
 			continue
 		}
-		if err != nil || n > 0 && poll[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
+		if err != nil || ready > 0 && poll[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
 			return
-		}
-		if n == 0 {
-			continue
 		}
 		g.mu.Lock()
-		n, err = unix.Read(fd, buf)
-		var items []sessionInput
-		if n > 0 {
-			items = g.decode(buf[:n])
+		items := g.flushPrefix(time.Now())
+		n := -1
+		if ready > 0 {
+			n, err = unix.Read(fd, buf)
+			if n > 0 {
+				items = append(items, g.decode(buf[:n])...)
+			}
 		}
 		g.mu.Unlock()
-		if err == unix.EAGAIN || err == unix.EINTR {
-			continue
-		}
-		if err != nil || n == 0 {
-			return
-		}
 		for _, item := range items {
 			select {
 			case input <- item:
 			case <-ctx.Done():
 				return
 			}
+		}
+		if ready == 0 || err == unix.EAGAIN || err == unix.EINTR {
+			continue
+		}
+		if err != nil || n == 0 {
+			return
 		}
 	}
 }
