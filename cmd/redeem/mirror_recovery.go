@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
 )
 
@@ -58,9 +59,23 @@ func runMirrorRecovery(args []string, supervisor bool, stdout, stderr io.Writer)
 			fmt.Fprintln(stderr, "supervisor requires physical terminal output")
 			return 2
 		}
+		if !term.IsTerminal(os.Stdin.Fd()) {
+			fmt.Fprintln(stderr, "supervisor requires physical terminal input")
+			return 2
+		}
+		if _, e := mirror.PlanSessionAttachment(remote, session, id, "0123456789abcdef0123456789abcdef"); e != nil {
+			fmt.Fprintln(stderr, e)
+			return 2
+		}
+		local, e := mirror.StartSessionLocal(ctx, remote, runtime, token)
+		if e != nil {
+			fmt.Fprintln(stderr, e)
+			return 1
+		}
+		defer local.Close()
 		client := &mirror.SessionRecoveryClient{Remote: remote, SelfCommand: self, RuntimeDir: runtime}
 		defer client.Close()
-		err = mirror.RunSessionSupervisor(ctx, mirror.SessionSupervisorConfig{Remote: remote, Session: session, SessionID: id, Token: token, Input: os.Stdin, Output: output, Control: client})
+		err = mirror.RunSessionSupervisor(ctx, mirror.SessionSupervisorConfig{Remote: remote, Session: session, SessionID: id, Token: token, Input: os.Stdin, Output: output, Control: client, Local: local})
 	} else if parentFD >= 0 || cancellationFD >= 0 {
 		if lockFD < 3 || parentFD < 3 || cancellationFD < 3 || lockFD == parentFD || lockFD == cancellationFD || parentFD == cancellationFD || readyFD != -1 {
 			fmt.Fprintln(stderr, "probe requires distinct inherited descriptors")

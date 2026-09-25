@@ -44,6 +44,32 @@ the connecting screen. Overflow or stalled output fails the attempt closed. The
 buffer is released on readiness or loss. Ordinary prompts are not held waiting
 for another read merely because the marker decoder retains partial prefixes.
 
+## Helper-local ownership and clipboard boundary (milestone 4 foundation)
+
+The private supervisor now exposes a same-UID, pidfd-authenticated local endpoint
+under its configured transport namespace and unique projection token. Status
+reports presence separately from readiness. It does not contact the source or
+start a coordinator. Duplicate endpoint binding fails closed; cleanup only
+unlinks the endpoint's own socket inode.
+
+`BindSessionInput` captures helper instance, attachment nonce and input generation
+**before** clipboard acquisition/upload. Completion is validated in the terminal
+event loop and written directly to that generation's child PTY. It is never sent
+through an asynchronous, unqualified Kitty `send-text`. Offline/connecting origins,
+old generations and other helper instances are rejected. Each request is bounded
+to one second and 4 KiB of input; IPC cannot queue input for a future attachment.
+
+`paste-image` supports this path through internal projection-token/transport
+arguments. Legacy direct-SSH windows retain their existing Kitty bridge. Public
+launch planning has not yet switched or supplied these arguments: this is the
+safe integration boundary, not a claim that milestone 4 is complete.
+
+`TestSessionLocalOriginRejectsOfflineConnectingAndDelayedPaste` exercises status,
+transport isolation, duplicate binding and origin checks against a real PTY.
+`TestPasteBridgeUploadAndFallbackKeepOriginalAttachment` completes a mock upload
+after reconnect and proves both its image path and delayed Ctrl-V fallback are
+rejected; fresh fallback succeeds and temporary image data is cleaned up.
+
 ## Terminal and process lifecycle
 
 - Raw mode and original descriptor flags are saved and restored. Physical input

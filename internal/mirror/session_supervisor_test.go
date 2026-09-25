@@ -196,6 +196,7 @@ type testSessionTerminal struct {
 	master, slave *os.File
 	fd            int
 	root          string
+	remote        RemoteConfig
 	control       *testSessionControl
 	cancel        context.CancelFunc
 	done          chan error
@@ -239,7 +240,13 @@ func sessionTerminalFixture(t *testing.T) *testSessionTerminal {
 			time.Sleep(time.Millisecond)
 		}
 	}()
-	cfg := SessionSupervisorConfig{Remote: RemoteConfig{Host: "isolated", SSHCommand: ssh, SnapshotCommand: []string{"redeem", "mirror", "snapshot"}}, Session: "original", SessionID: zellijlive.SessionID("boot", "original", 1, 1), Token: "projection", Input: slave, Output: slave, Control: h.control}
+	h.remote = RemoteConfig{Host: "isolated", SSHCommand: ssh, SnapshotCommand: []string{"redeem", "mirror", "snapshot"}}
+	local, err := StartSessionLocal(ctx, h.remote, root, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	cfg := SessionSupervisorConfig{Remote: h.remote, Session: "original", SessionID: zellijlive.SessionID("boot", "original", 1, 1), Token: "0123456789abcdef0123456789abcdef", Input: slave, Output: slave, Control: h.control, Local: local}
 	go func() { h.done <- RunSessionSupervisor(ctx, cfg); close(h.done) }()
 	t.Cleanup(func() {
 		cancel()
@@ -248,6 +255,7 @@ func sessionTerminalFixture(t *testing.T) *testSessionTerminal {
 		case <-time.After(3 * time.Second):
 			t.Error("supervisor did not stop")
 		}
+		local.Close()
 		current, _ := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
 		currentFlags, _ := unix.FcntlInt(slave.Fd(), unix.F_GETFL, 0)
 		if !reflect.DeepEqual(original, current) || originalFlags != currentFlags {

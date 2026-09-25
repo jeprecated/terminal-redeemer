@@ -903,6 +903,8 @@ func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Write
 	clipboardCommand := fs.String("clipboard-command", resolvedConfig.Mirror.Clipboard.Command, "wl-paste compatible executable")
 	kittyCommand := fs.String("kitty-command", resolvedConfig.Mirror.Clipboard.KittyCommand, "Kitty executable")
 	kittyTo := fs.String("kitty-to", os.Getenv("KITTY_LISTEN_ON"), "Kitty remote-control socket")
+	projectionToken := fs.String("projection-token", "", "internal persistent view identity")
+	remoteJSON := fs.String("remote-json", "", "internal immutable view transport")
 	tempDir := fs.String("temp-dir", resolvedConfig.Mirror.Clipboard.TempDir, "shared absolute image temp directory")
 	sshOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.SSHOptions...)}
 	scpOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.Clipboard.SCPOptions...)}
@@ -916,7 +918,30 @@ func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Write
 		}
 		return 2
 	}
-	result, err := (mirror.PasteBridge{Runner: mirror.ExecRunner{}}).Paste(context.Background(), mirror.PasteConfig{
+	bridge := mirror.PasteBridge{Runner: mirror.ExecRunner{}}
+	if *projectionToken != "" || *remoteJSON != "" {
+		if *projectionToken == "" || len(*remoteJSON) == 0 || len(*remoteJSON) > 64<<10 {
+			fmt.Fprintln(stderr, "persistent paste requires bounded transport configuration and projection token")
+			return 2
+		}
+		var remote mirror.RemoteConfig
+		if err := json.Unmarshal([]byte(*remoteJSON), &remote); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		input, err := mirror.BindSessionInput(context.Background(), remote, "", *projectionToken)
+		if err != nil {
+			fmt.Fprintf(stderr, "mirror paste-image discarded: %v\n", err)
+			return 1
+		}
+		bridge.Input = input
+		// Use the view's host and SSH options rather than new defaults.
+		// SCP keeps its existing independently configured executable/options.
+		*host = remote.Host
+		*sshCommand = remote.SSHCommand
+		sshOptions.values = remote.SSHOptions
+	}
+	result, err := bridge.Paste(context.Background(), mirror.PasteConfig{
 		SourceHost: *host, SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
 		SCPCommand: *scpCommand, SCPOptions: scpOptions.values,
 		ClipboardCommand: *clipboardCommand, KittyCommand: *kittyCommand, KittyTo: *kittyTo,

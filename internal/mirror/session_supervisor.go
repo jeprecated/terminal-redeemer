@@ -49,6 +49,7 @@ type SessionSupervisorConfig struct {
 	Session, SessionID, Token string
 	Input, Output             *os.File
 	Control                   SessionControl
+	Local                     *SessionLocalControl
 }
 type sessionControlResult struct {
 	request SessionControlRequest
@@ -90,6 +91,16 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 	// Validate immutable planning inputs before touching the terminal.
 	if _, err := PlanSessionAttachment(cfg.Remote, cfg.Session, cfg.SessionID, request.Client); err != nil {
 		return err
+	}
+	var localRequests <-chan sessionLocalCall
+	transportIdentity := ""
+	if cfg.Local != nil {
+		var err error
+		transportIdentity, err = recoveryIdentity(cfg.Remote)
+		if err != nil {
+			return err
+		}
+		localRequests = cfg.Local.requests
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -169,6 +180,9 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			return sessionChecking
 		}
 		return sessionOffline
+	}
+	localState := func() SessionLocalState {
+		return SessionLocalState{Transport: transportIdentity, Token: cfg.Token, Session: cfg.Session, SessionID: cfg.SessionID, State: string(phase()), Origin: SessionInputOrigin{Client: request.Client, Attempt: grant.Attempt, Generation: gate.current()}}
 	}
 	render := func() {
 		if phase() == sessionReady {
@@ -270,6 +284,22 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case call := <-localRequests:
+			state := localState()
+			reply := sessionLocalWire{Version: 1}
+			if sessionContextError(call.ctx) != nil || !recoveryPeerAlive(call.peer) {
+				reply.Error = "expired terminal request"
+			} else if origin := call.request.Origin; origin != nil {
+				if child == nil || state.Origin.Generation == 0 || *origin != state.Origin {
+					reply.Error = "attachment changed or is not ready; paste discarded"
+				} else if err := writeSessionTerminal(call.ctx, child.fd, call.request.Input); err != nil {
+					lose()
+					reply.Error = "cannot write to originating attachment"
+				}
+			}
+			state = localState()
+			reply.State = &state
+			call.reply <- reply // one buffered reply; never wait for the IPC client
 		case item, ok := <-input:
 			if !ok {
 				return fmt.Errorf("physical terminal closed")

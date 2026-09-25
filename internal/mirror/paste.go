@@ -33,13 +33,16 @@ type PasteResult struct {
 type PasteBridge struct {
 	Runner Runner
 	ID     func() (string, error)
+	// Input is bound before clipboard acquisition. Persistent views use a
+	// helper origin, never an unqualified late Kitty send-text operation.
+	Input func(context.Context, []byte) error
 }
 
 func (bridge PasteBridge) Paste(ctx context.Context, cfg PasteConfig) (PasteResult, error) {
 	if err := ValidateDestination(cfg.SourceHost); err != nil {
 		return PasteResult{}, err
 	}
-	if strings.TrimSpace(cfg.KittyTo) == "" {
+	if bridge.Input == nil && strings.TrimSpace(cfg.KittyTo) == "" {
 		return PasteResult{}, fmt.Errorf("paste-image requires --kitty-to or KITTY_LISTEN_ON")
 	}
 	if !filepath.IsAbs(cfg.TempDir) {
@@ -50,23 +53,29 @@ func (bridge PasteBridge) Paste(ctx context.Context, cfg PasteConfig) (PasteResu
 		runner = ExecRunner{}
 	}
 
+	input := bridge.Input
+	if input == nil {
+		input = func(ctx context.Context, data []byte) error {
+			return sendKittyText(ctx, runner, cfg.KittyCommand, cfg.KittyTo, data)
+		}
+	}
 	types, err := runner.Output(ctx, Command{Name: cfg.ClipboardCommand, Args: []string{"--list-types"}})
 	if err != nil {
-		if fallbackErr := sendKittyText(ctx, runner, cfg.KittyCommand, cfg.KittyTo, []byte{0x16}); fallbackErr != nil {
+		if fallbackErr := input(ctx, []byte{0x16}); fallbackErr != nil {
 			return PasteResult{}, fmt.Errorf("clipboard unavailable (%v) and Ctrl-V fallback failed: %w", err, fallbackErr)
 		}
 		return PasteResult{FellBack: true}, nil
 	}
 	mime, ext := chooseImageMIME(types, cfg.MIMETypes)
 	if mime == "" {
-		if err := sendKittyText(ctx, runner, cfg.KittyCommand, cfg.KittyTo, []byte{0x16}); err != nil {
+		if err := input(ctx, []byte{0x16}); err != nil {
 			return PasteResult{}, fmt.Errorf("forward Ctrl-V: %w", err)
 		}
 		return PasteResult{FellBack: true}, nil
 	}
 	image, err := runner.Output(ctx, Command{Name: cfg.ClipboardCommand, Args: []string{"--type", mime}})
 	if err != nil || len(image) == 0 {
-		if fallbackErr := sendKittyText(ctx, runner, cfg.KittyCommand, cfg.KittyTo, []byte{0x16}); fallbackErr != nil {
+		if fallbackErr := input(ctx, []byte{0x16}); fallbackErr != nil {
 			return PasteResult{}, fmt.Errorf("read clipboard image (%v) and Ctrl-V fallback failed: %w", err, fallbackErr)
 		}
 		return PasteResult{FellBack: true}, nil
@@ -96,7 +105,7 @@ func (bridge PasteBridge) Paste(ctx context.Context, cfg PasteConfig) (PasteResu
 	if err := runner.Run(ctx, Command{Name: cfg.SCPCommand, Args: scpArgs}); err != nil {
 		return PasteResult{}, fmt.Errorf("copy clipboard image to source: %w", err)
 	}
-	if err := sendKittyText(ctx, runner, cfg.KittyCommand, cfg.KittyTo, []byte(path)); err != nil {
+	if err := input(ctx, []byte(path)); err != nil {
 		return PasteResult{}, fmt.Errorf("inject remote clipboard path: %w", err)
 	}
 	return PasteResult{Image: true, MIMEType: mime, RemotePath: path}, nil
