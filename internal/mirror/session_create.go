@@ -29,29 +29,37 @@ func RunSessionCreation(ctx context.Context, session string) (CreatedSession, er
 	}
 	observer := zellijlive.CommandCataloger{BootID: boot}
 	return createSessionOnce(ctx, session, observer, func(ctx context.Context) (string, error) {
-		env := []string{}
-		for _, entry := range os.Environ() {
-			key, _, _ := strings.Cut(entry, "=")
-			scrub := false
-			for _, name := range zellijEnvironment {
-				if key == name {
-					scrub = true
-					break
-				}
-			}
-			if !scrub {
-				env = append(env, entry)
-			}
-		}
+		base := zellijlive.DefaultSocketBase(os.Getuid())
+		env := sessionCreationEnv(os.Environ(), base)
 		_, err := boundedSessionCatalog(ctx, ExecRunner{Env: env}, Command{Name: "zellij", Args: []string{"attach", "--create-background", "--", session}})
 		if err != nil {
 			return "", err
 		}
 		// Anchor the successful creator's socket before any subsequent catalog
 		// walk. A name observed later cannot replace this initial identity.
-		path := filepath.Join(zellijlive.DefaultSocketBase(os.Getuid()), zellijlive.SocketContractDir, session)
+		path := filepath.Join(base, zellijlive.SocketContractDir, session)
 		return zellijlive.ExactSocketIDAt(unix.AT_FDCWD, path, boot, session)
 	})
+}
+
+// sessionCreationEnv pins Zellij to the socket base the receipt is read from;
+// Zellij's own fallback without XDG_RUNTIME_DIR differs from DefaultSocketBase.
+func sessionCreationEnv(environ []string, base string) []string {
+	env := []string{}
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		scrub := key == "ZELLIJ_SOCKET_DIR"
+		for _, name := range zellijEnvironment {
+			if key == name {
+				scrub = true
+				break
+			}
+		}
+		if !scrub {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "ZELLIJ_SOCKET_DIR="+base)
 }
 
 func createSessionOnce(ctx context.Context, session string, observer zellijlive.Cataloger, create func(context.Context) (string, error)) (CreatedSession, error) {

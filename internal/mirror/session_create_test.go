@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -157,5 +158,13 @@ func TestRealPinnedZellijCreationReceiptAttachesExactly(t *testing.T) {
 	replay.Env = cmd.Env
 	if err := replay.Run(); err == nil {
 		t.Fatal("source creation replay adopted an existing session")
+	}
+}
+
+func TestSessionCreationPinsReceiptSocketBase(t *testing.T) {
+	env := sessionCreationEnv([]string{"PATH=/bin", "ZELLIJ=1", "ZELLIJ_SESSION_NAME=foreign", "ZELLIJ_SOCKET_DIR=/elsewhere"}, "/run/user/1000/zellij")
+	want := []string{"PATH=/bin", "ZELLIJ_SOCKET_DIR=/run/user/1000/zellij"}
+	if !reflect.DeepEqual(env, want) {
+		t.Fatalf("creation env = %q, want %q", env, want)
 	}
 }
