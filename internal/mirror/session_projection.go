@@ -23,7 +23,16 @@ func sessionSupervisorArgv(self string, remote RemoteConfig, session, id, token 
 	if err != nil {
 		return nil, err
 	}
-	return []string{self, "mirror", "session-supervisor", "--remote-json", string(payload), "--session", session, "--session-id", id, "--token", token}, nil
+	argv := []string{self, "mirror", "session-supervisor", "--remote-json", string(payload), "--session", session, "--session-id", id, "--token", token}
+	// Keep every launched helper observable by procmeta's bounded cmdline read.
+	size := 0
+	for _, arg := range argv {
+		size += len(arg) + 1
+	}
+	if size > 64<<10 {
+		return nil, fmt.Errorf("persistent helper argv exceeds process evidence bound")
+	}
+	return argv, nil
 }
 
 func sameSupervisorExecutable(observed, configured string) bool {

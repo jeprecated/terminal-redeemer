@@ -153,6 +153,8 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 	switch args[0] {
 	case "snapshot":
 		return runMirrorSnapshot(args[1:], resolvedConfig, stdout, stderr)
+	case "session-create":
+		return runMirrorSessionCreate(args[1:], stdout, stderr)
 	case "session-catalog":
 		return runMirrorSessionCatalog(args[1:], resolvedConfig, stdout, stderr)
 	case "session-attach":
@@ -328,7 +330,7 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 	sshCommand := fs.String("ssh-command", resolvedConfig.Mirror.SSHCommand, "SSH executable")
 	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
 	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
-	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
+	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by the persistent viewer and clipboard mapping")
 	dryRun := fs.Bool("dry-run", false, "print launch command without executing")
 	noClipboard := fs.Bool("no-clipboard", false, "disable image clipboard bridge mapping")
 	sourceWorkspace := fs.String("source-workspace", "", "optional Lattice Niri workspace name or number for the source Kitty")
@@ -356,11 +358,20 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 		return 1
 	}
 	socket := fmt.Sprintf("unix:/tmp/%s-%s.sock", safeSocketPart(*appID), unique)
-	plan, err := mirror.PlanNew(session, mirror.LaunchConfig{
-		SourceHost: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values,
-		LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID,
+	remote := mirror.RemoteConfig{Host: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values, SnapshotCommand: resolvedConfig.Mirror.SnapshotCommand}
+	creation, err := mirror.PlanSessionCreation(remote, session)
+	if err != nil {
+		fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
+		return 1
+	}
+	launchCfg := mirror.LaunchConfig{
+		SourceHost: remote.Host, SSHCommand: remote.SSHCommand, SSHOptions: remote.SSHOptions, SnapshotCommand: remote.SnapshotCommand,
+		LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID, CorrelationToken: unique,
 		Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
-	})
+		// Preflight only: this ID is never executed or used as creation evidence.
+		SessionID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}
+	plan, err := mirror.PlanNew(session, launchCfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror new failed: %v\n", err)
 		return 1
@@ -370,7 +381,9 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 		SnapshotCommand: resolvedConfig.Mirror.SnapshotCommand, Session: session, Workspace: *sourceWorkspace,
 	})
 	if *dryRun {
-		_, _ = fmt.Fprintln(stdout, mirror.RenderCommand(plan.Command))
+		fmt.Fprintln(stdout, mirror.RenderCommand(creation))
+		fmt.Fprintln(stdout, "# launch template: insert the successful creation receipt's exact session-id; never retry creation")
+		_, _ = fmt.Fprintln(stdout, strings.ReplaceAll(mirror.RenderCommand(plan.Command), launchCfg.SessionID, "<creation-receipt-session-id>"))
 		if helperPlanErr != nil {
 			_, _ = fmt.Fprintf(stdout, "# source Kitty unavailable (best effort): %v\n", helperPlanErr)
 		} else {
@@ -379,13 +392,26 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 		}
 		return 0
 	}
+	creationCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	receipt, err := mirror.CreateRemoteSession(creationCtx, mirror.ExecRunner{}, remote, session)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(stderr, "mirror new failed for %s: %v; session may exist, inspect explicitly; creation was not retried\n", session, err)
+		return 1
+	}
+	launchCfg.SessionID = receipt.SessionID
+	plan, err = mirror.PlanNew(session, launchCfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "session %s was created but view planning failed: %v\n", session, err)
+		return 1
+	}
 	sourceErr, err := executeMirrorNew(context.Background(), mirror.ExecRunner{}, plan, helper, helperPlanErr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "mirror new failed for %s: %v\n", plan.Session, err)
 		return 1
 	}
 	if sourceErr != nil {
-		_, _ = fmt.Fprintf(stderr, "warning: persistent-session creator %s was launched for %s, but source Kitty setup did not complete (the detached view may still be open): %v\n", plan.Session, strings.TrimSpace(*host), sourceErr)
+		_, _ = fmt.Fprintf(stderr, "warning: persistent view %s was launched for %s, but source Kitty setup did not complete (the detached view may still be open): %v\n", plan.Session, strings.TrimSpace(*host), sourceErr)
 	}
 	return 0
 }
@@ -457,7 +483,7 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 	snapshotFile := fs.String("snapshot-file", "", "read snapshot JSON locally instead of SSH")
 	launcher := fs.String("launcher-command", resolvedConfig.Mirror.LauncherCommand, "Kitty-compatible launcher executable")
 	appID := fs.String("app-id", resolvedConfig.Mirror.AppID, "owned Kitty app ID/class")
-	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by Kitty clipboard mapping")
+	selfCommand := fs.String("self-command", resolvedConfig.Mirror.SelfCommand, "redeem executable used by the persistent viewer and clipboard mapping")
 	openDelay := fs.Duration("open-delay", resolvedConfig.Mirror.OpenDelay, "delay between launches")
 	all := fs.Bool("all", false, "open all discovered source windows")
 	selectIndex := fs.Int("select", 0, "open one 1-based result index without prompting")
@@ -518,7 +544,13 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 			return 1
 		}
 		socket := fmt.Sprintf("unix:/tmp/%s-%s.sock", safeSocketPart(*appID), unique)
+		id, idErr := snapshot.ExactSessionID(mirror.SessionName(window))
+		if idErr != nil {
+			fmt.Fprintf(stderr, "mirror open failed: %v\n", idErr)
+			return 1
+		}
 		plan, planErr := mirror.PlanLaunch(window, mirror.LaunchConfig{
+			SessionID: id, SnapshotCommand: source.snapshotCommand.values, CorrelationToken: unique,
 			SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
 			LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID,
 			Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,

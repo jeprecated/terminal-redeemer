@@ -467,7 +467,13 @@ func FollowOnce(ctx context.Context, cfg FollowConfig, snapshot Snapshot, select
 			result.Reason = "prepare launch token: " + err.Error()
 			return result
 		}
+		id, err := snapshot.ExactSessionID(SessionName(window))
+		if err != nil {
+			result.Reason = "prepare exact attachment: " + err.Error()
+			return result
+		}
 		plan, err := PlanLaunch(window, LaunchConfig{
+			SessionID: id, SelfCommand: cfg.SelfCommand, SnapshotCommand: cfg.SnapshotCommand,
 			SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions,
 			LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token,
 		})

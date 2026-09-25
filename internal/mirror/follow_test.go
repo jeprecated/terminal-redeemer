@@ -19,7 +19,7 @@ func followSnapshot(sessions ...string) Snapshot {
 	return Snapshot{
 		Host: "lattice", Profile: "default", GeneratedAt: time.Now(),
 		Workspaces:     []Workspace{{ID: "remote-empty", Index: 1}, {ID: "remote-dev", Index: 2, Name: "Dev", Output: "DP-1"}},
-		ActiveSessions: append([]string(nil), sessions...), Windows: windows,
+		ActiveSessions: append([]string{}, sessions...), SessionIDs: fixtureSessionIDs(sessions...), Windows: windows,
 	}
 }
 
@@ -190,24 +190,24 @@ func (sim *followSim) Run(_ context.Context, command Command) error {
 	if command.Name != "kitty" {
 		return nil
 	}
-	joined := strings.Join(command.Args, " ")
-	session := ""
-	for _, candidate := range []string{"A", "B", "C"} {
-		if strings.Contains(joined, "'"+candidate+"'") {
-			session = candidate
-			break
+	session, token := "", ""
+	for i, arg := range command.Args {
+		if i+1 < len(command.Args) {
+			switch arg {
+			case "--session":
+				session = command.Args[i+1]
+			case "--token":
+				token = command.Args[i+1]
+			}
 		}
 	}
 	sim.launchedSessions = append(sim.launchedSessions, session)
 	if !sim.correlate {
 		return nil
 	}
-	marker := projectionTokenEnvironment + "="
-	i := strings.Index(joined, marker)
-	if i < 0 || i+len(marker)+32 > len(joined) {
+	if !correlationTokenPattern.MatchString(token) {
 		return errors.New("missing token")
 	}
-	token := joined[i+len(marker) : i+len(marker)+32]
 	window := OwnedWindow{ID: 40 + len(sim.launchedSessions), PID: 400 + len(sim.launchedSessions)}
 	sim.exact = &Projection{Window: window, SourceHost: "lattice", Session: session, CorrelationToken: token}
 	return nil
@@ -235,7 +235,7 @@ func (sim *followSim) deps() FollowDeps {
 }
 
 func followConfig() FollowConfig {
-	return FollowConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", NiriCommand: "niri", Timeout: time.Second, EvidenceInterval: time.Millisecond, MaxPerPoll: 2, MaxTotal: 4}
+	return FollowConfig{SelfCommand: "redeem", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", NiriCommand: "niri", Timeout: time.Second, EvidenceInterval: time.Millisecond, MaxPerPoll: 2, MaxTotal: 4}
 }
 
 func TestFollowUsesSourceOrderAndFiniteAttemptBounds(t *testing.T) {

@@ -25,7 +25,7 @@ func TestSupervisorProjectionOfflineOwnershipAndTransportDescendant(t *testing.T
 			writeMirrorProc(t, root, 101, 100, 11, argv)
 			// Even an otherwise recognizable SSH descendant belongs to the helper,
 			// not a second projection. Titles remain irrelevant.
-			legacy, _ := PlanLaunch(Window{ZellijSession: r.Session}, LaunchConfig{SourceHost: remote.Host, SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
+			legacy, _ := legacyPlanLaunch(Window{ZellijSession: r.Session}, LaunchConfig{SourceHost: remote.Host, SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
 			writeMirrorProc(t, root, 102, 101, 12, launchSSHArgv(t, legacy))
 			transport, _ := recoveryIdentity(remote)
 			state := SessionLocalState{Transport: transport, Token: r.Token, Session: r.Session, SessionID: r.SessionID, State: "offline", Origin: SessionInputOrigin{Client: r.Client}}
@@ -92,6 +92,14 @@ func TestTwoSupervisorsUnderOneWindowRemainAmbiguous(t *testing.T) {
 	}
 }
 
+func TestSupervisorPlanMustRemainWithinProcessEvidenceBound(t *testing.T) {
+	r := recoveryRequest(0)
+	_, err := sessionSupervisorArgv(strings.Repeat("x", 64<<10), RemoteConfig{Host: "source", SSHCommand: "ssh", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}}, r.Session, r.SessionID, r.Token)
+	if err == nil || !strings.Contains(err.Error(), "evidence bound") {
+		t.Fatalf("unobservable helper could launch: %v", err)
+	}
+}
+
 func TestSupervisorExecutableDoesNotAcceptWrongDirectoryOrNearMatch(t *testing.T) {
 	for _, observed := range []string{"/evil/redeem", "/evil/.redeem-wrapped", "/nix/store/example/bin/.redeem-wrapped-extra"} {
 		if sameSupervisorExecutable(observed, "/nix/store/example/bin/redeem") {
@@ -103,7 +111,7 @@ func TestSupervisorExecutableDoesNotAcceptWrongDirectoryOrNearMatch(t *testing.T
 func TestProjectionIncompleteDescendantObservationDiscardsEarlierMatch(t *testing.T) {
 	root := t.TempDir()
 	writeMirrorProc(t, root, 100, 1, 10, []string{"kitty"})
-	plan, _ := PlanLaunch(Window{ZellijSession: "known"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
+	plan, _ := legacyPlanLaunch(Window{ZellijSession: "known"}, LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned"})
 	writeMirrorProc(t, root, 101, 100, 11, launchSSHArgv(t, plan))
 	writeMirrorProc(t, root, 102, 100, 12, []string{"unreadable"})
 	if err := os.Remove(filepath.Join(root, "102", "cmdline")); err != nil {

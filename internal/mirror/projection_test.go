@@ -34,9 +34,9 @@ func TestProjectionEvidenceAcceptsOnlyCompleteGeneratedForms(t *testing.T) {
 			var plan LaunchPlan
 			var err error
 			if tc.create {
-				plan, err = PlanNew(tc.session, launchCfg)
+				plan, err = legacyPlanNew(tc.session, launchCfg)
 			} else {
-				plan, err = PlanLaunch(window, launchCfg)
+				plan, err = legacyPlanLaunch(window, launchCfg)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -56,7 +56,7 @@ func TestProjectionEvidenceAcceptsOnlyCompleteGeneratedForms(t *testing.T) {
 
 func TestProjectionEvidenceRejectsDeceptiveSSHAndShellNearMatches(t *testing.T) {
 	cfg := LaunchConfig{SourceHost: "lattice", SSHCommand: "/usr/bin/ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", AppID: "owned"}
-	plan, err := PlanLaunch(Window{ZellijSession: "Alpha"}, cfg)
+	plan, err := legacyPlanLaunch(Window{ZellijSession: "Alpha"}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +87,8 @@ func TestInspectProjectionsSeparatesAmbiguousUntrackedAndPreUpgrade(t *testing.T
 	root := t.TempDir()
 	writeMirrorProc(t, root, 100, 1, 10, []string{"kitty"})
 	cfg := LaunchConfig{SourceHost: "lattice", SSHCommand: "ssh", SSHOptions: []string{"-v"}, LauncherCommand: "kitty", AppID: "owned"}
-	planA, _ := PlanLaunch(Window{ZellijSession: "A"}, cfg)
-	planB, _ := PlanLaunch(Window{ZellijSession: "B"}, cfg)
+	planA, _ := legacyPlanLaunch(Window{ZellijSession: "A"}, cfg)
+	planB, _ := legacyPlanLaunch(Window{ZellijSession: "B"}, cfg)
 	writeMirrorProc(t, root, 101, 100, 11, launchSSHArgv(t, planA))
 	writeMirrorProc(t, root, 102, 100, 12, launchSSHArgv(t, planB))
 	writeMirrorProc(t, root, 200, 1, 20, []string{"kitty"})

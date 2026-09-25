@@ -6,6 +6,31 @@ import (
 	"time"
 )
 
+func TestApplyAndFollowRefuseNameOnlyLaunches(t *testing.T) {
+	for _, dry := range []bool{false, true} {
+		snapshot := activeSnapshot("lattice", "A")
+		snapshot.SessionIDs = nil
+		cfg := applyTestConfig(t, testPin("A"), snapshot)
+		cfg.DryRun = dry
+		runner := &pinRunner{}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		result, err := ApplyPinned(ctx, cfg, ApplyDeps{Runner: runner, ListWindows: func(context.Context) ([]OwnedWindow, error) { return nil, nil }, Workspaces: func(context.Context) ([]OwnedWorkspace, error) { return nil, nil }, Inspect: func(context.Context, []OwnedWindow, ProjectionEvidenceConfig) (ProjectionInventory, error) {
+			return ProjectionInventory{}, nil
+		}})
+		cancel()
+		if err != nil || len(result.Items) != 1 || result.Items[0].Status != ApplyFailed || len(runner.commands) != 0 {
+			t.Fatalf("name-only apply: %+v %v %+v", result, err, runner.commands)
+		}
+	}
+	snapshot := followSnapshot("A")
+	snapshot.SessionIDs = nil
+	sim := newFollowSim()
+	result := FollowOnce(context.Background(), followConfig(), snapshot, selectedWorkspace(snapshot), FrozenDestination{ID: "local"}, &FollowState{}, sim.deps())
+	if result.Healthy || result.Attempted != 0 || len(sim.commands) != 0 {
+		t.Fatalf("name-only follow: %+v %+v", result, sim.commands)
+	}
+}
+
 func TestSupervisedPresenceSavesAndDeduplicatesRegardlessOfReadiness(t *testing.T) {
 	for _, ready := range []bool{false, true} {
 		snapshot := followSnapshot("A")

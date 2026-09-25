@@ -20,6 +20,8 @@ var zellijEnvironment = []string{
 
 type LaunchConfig struct {
 	SourceHost       string
+	SessionID        string
+	SnapshotCommand  []string
 	CorrelationToken string
 	SSHCommand       string
 	SSHOptions       []string
@@ -44,20 +46,20 @@ func PlanLaunch(window Window, cfg LaunchConfig) (LaunchPlan, error) {
 	if session == "" {
 		return LaunchPlan{}, fmt.Errorf("source window %d has no zellij session", window.SourceWindowID)
 	}
-	return planZellijLaunch(window, cfg, session, false)
+	return planZellijLaunch(window, cfg, session)
 }
 
-// PlanNew launches a deliberately new, generated Zellij session. Existing
-// session launches use PlanLaunch and never receive --create.
+// PlanNew attaches a generated session after its one creation receipt has
+// supplied SessionID. No window launch or reconnect may perform creation.
 func PlanNew(session string, cfg LaunchConfig) (LaunchPlan, error) {
 	if !generatedSessionPattern.MatchString(session) {
 		return LaunchPlan{}, fmt.Errorf("invalid generated mirror session name %q", session)
 	}
 	window := Window{Title: session, ZellijSession: session}
-	return planZellijLaunch(window, cfg, session, true)
+	return planZellijLaunch(window, cfg, session)
 }
 
-func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bool) (LaunchPlan, error) {
+func planZellijLaunch(window Window, cfg LaunchConfig, session string) (LaunchPlan, error) {
 	if err := ValidateDestination(cfg.SourceHost); err != nil {
 		return LaunchPlan{}, err
 	}
@@ -72,30 +74,17 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bo
 	if window.Terminal != nil {
 		cwd = strings.TrimSpace(window.Terminal.CWD)
 	}
-	remoteArgv := []string{"env"}
-	for _, name := range zellijEnvironment {
-		remoteArgv = append(remoteArgv, "-u", name)
-	}
-	if cfg.CorrelationToken != "" {
-		if !correlationTokenPattern.MatchString(cfg.CorrelationToken) {
-			return LaunchPlan{}, fmt.Errorf("invalid projection correlation token")
+	if cfg.CorrelationToken == "" {
+		var err error
+		cfg.CorrelationToken, err = RandomID()
+		if err != nil {
+			return LaunchPlan{}, err
 		}
-		remoteArgv = append(remoteArgv, projectionTokenEnvironment+"="+cfg.CorrelationToken)
 	}
-	remoteArgv = append(remoteArgv, "zellij", "attach")
-	switch {
-	case create:
-		remoteArgv = append(remoteArgv, "--create", session, "options", "--on-force-close", "detach")
-	case strings.HasPrefix(session, "-"):
-		// Zellij requires the option boundary for leading-dash session names,
-		// and its trailing options subcommand cannot be combined after it.
-		remoteArgv = append(remoteArgv, "--", session)
-	default:
-		remoteArgv = append(remoteArgv, session, "options", "--on-force-close", "detach")
-	}
-	remoteCommand := "exec " + QuoteCommand(remoteArgv)
-	if cwd != "" {
-		remoteCommand = "cd -- " + ShellQuote(cwd) + " 2>/dev/null || true; " + remoteCommand
+	remote := RemoteConfig{Host: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, SnapshotCommand: cfg.SnapshotCommand}
+	supervisor, err := sessionSupervisorArgv(cfg.SelfCommand, remote, session, cfg.SessionID, cfg.CorrelationToken)
+	if err != nil {
+		return LaunchPlan{}, err
 	}
 
 	titlePart := strings.TrimSpace(window.Title)
@@ -112,15 +101,12 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string, create bo
 		if strings.TrimSpace(cfg.Socket) == "" || strings.TrimSpace(cfg.SelfCommand) == "" {
 			return LaunchPlan{}, fmt.Errorf("clipboard bridge requires a socket and self command")
 		}
-		mapping := "map=ctrl+v launch --type=background " + QuoteCommand([]string{cfg.SelfCommand, "mirror", "paste-image", "--host", cfg.SourceHost, "--kitty-to", cfg.Socket})
+		payload, _ := json.Marshal(remote)
+		mapping := "map=ctrl+v launch --type=background " + QuoteCommand([]string{cfg.SelfCommand, "mirror", "paste-image", "--projection-token", cfg.CorrelationToken, "--remote-json", string(payload)})
 		args = append(args, "--listen-on", cfg.Socket, "--override", mapping)
 	}
-	sshArgs, err := buildSSHArgs(cfg.SSHOptions, []string{"-tt"}, cfg.SourceHost, remoteCommand)
-	if err != nil {
-		return LaunchPlan{}, err
-	}
-	args = append(args, "-e", cfg.SSHCommand)
-	args = append(args, sshArgs...)
+	args = append(args, "-e")
+	args = append(args, supervisor...)
 	return LaunchPlan{
 		SourceHost: cfg.SourceHost,
 		Session:    session,

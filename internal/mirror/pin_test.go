@@ -230,9 +230,10 @@ func (r *pinRunner) Run(_ context.Context, command Command) error {
 	r.commands = append(r.commands, command)
 	joined := strings.Join(command.Args, " ")
 	if command.Name == "kitty" {
-		marker := projectionTokenEnvironment + "="
-		if index := strings.Index(joined, marker); index >= 0 && len(joined) >= index+len(marker)+32 {
-			r.token = joined[index+len(marker) : index+len(marker)+32]
+		for i, arg := range command.Args {
+			if arg == "--token" && i+1 < len(command.Args) {
+				r.token = command.Args[i+1]
+			}
 		}
 	}
 	if command.Name == "kitty" && r.failSession != "" && strings.Contains(joined, r.failSession) {
@@ -248,7 +249,7 @@ func TestApplyPinnedPartialLaunchPlacementAndDuplicateIdempotence(t *testing.T) 
 	pin := testPin("A")
 	pin.Projections = append(pin.Projections, pinned("B", 1))
 	snapshot := activeSnapshot("lattice", "A", "B")
-	runner := &pinRunner{failSession: "'B'"}
+	runner := &pinRunner{failSession: "--session B "}
 	deps := ApplyDeps{
 		Runner: runner,
 		ListWindows: func(context.Context) ([]OwnedWindow, error) {
@@ -397,11 +398,11 @@ func applyTestConfig(t *testing.T, pin Pin, snapshot Snapshot) ApplyConfig {
 	if _, err := store.Write(pin); err != nil {
 		t.Fatal(err)
 	}
-	return ApplyConfig{Snapshot: snapshot, SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", NiriCommand: "niri", StateDir: stateDir, Timeout: time.Second, PollInterval: time.Millisecond}
+	return ApplyConfig{SelfCommand: "redeem", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, Snapshot: snapshot, SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", NiriCommand: "niri", StateDir: stateDir, Timeout: time.Second, PollInterval: time.Millisecond}
 }
 
 func activeSnapshot(host string, sessions ...string) Snapshot {
-	snapshot := Snapshot{Host: host, Profile: "default", ActiveSessions: append([]string{}, sessions...), Windows: []Window{}}
+	snapshot := Snapshot{Host: host, Profile: "default", GeneratedAt: time.Now(), SessionIDs: fixtureSessionIDs(sessions...), ActiveSessions: append([]string{}, sessions...), Windows: []Window{}}
 	for i, session := range sessions {
 		snapshot.Windows = append(snapshot.Windows, Window{Order: i, AppID: "zellij", Headless: true, ZellijSession: session})
 	}

@@ -123,7 +123,7 @@ func inspectProjectionWindow(ctx context.Context, window OwnedWindow, cfg Projec
 }
 
 // parseProjectionSSHArgv accepts only the complete deterministic SSH argv
-// emitted by PlanLaunch/PlanNew: exact executable identity as represented in
+// emitted by pre-supervisor launches: exact executable identity as represented in
 // argv[0], exact configured options, -tt, --, destination, and one static
 // remote command. It does not interpret arbitrary SSH argv.
 func parseProjectionSSHArgv(argv []string, sshCommand string, sshOptions []string) (host string, session string, token string, ok bool) {

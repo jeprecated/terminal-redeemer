@@ -730,7 +730,7 @@ func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
 	ssh := filepath.Join(dir, "ssh")
-	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"active_zellij_sessions\":[\"A\"],\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
+	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"active_zellij_sessions\":[\"A\"],\"active_zellij_session_ids\":{\"A\":\"ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"},\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	niri := filepath.Join(dir, "niri")
@@ -772,7 +772,7 @@ func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
 func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	root := t.TempDir()
 	snapshotPath := filepath.Join(root, "snapshot.json")
-	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"work","zellij_session":"session-a","terminal":{"cwd":"/tmp/project","zellij_session":"session-a"}}]}`
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","active_zellij_sessions":["session-a"],"active_zellij_session_ids":{"session-a":"ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"work","zellij_session":"session-a","terminal":{"cwd":"/tmp/project","zellij_session":"session-a"}}]}`
 	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +782,7 @@ func TestMirrorOpenDryRunFromSnapshotFile(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, part := range []string{"'kitty'", "'source[0|session-a]: work'", "'ssh'", "'attach'", "'session-a'", "'/tmp/project'"} {
+	for _, part := range []string{"'kitty'", "'source[0|session-a]: work'", "'session-supervisor'", "'--session-id'", "'session-a'"} {
 		if !strings.Contains(out.String(), part) {
 			t.Fatalf("dry-run missing %q: %s", part, out.String())
 		}
@@ -801,7 +801,7 @@ func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "--create", "redeem-0123456789abcdef0123456789abcdef", "--on-force-close", "detach", "attach-local", "--workspace", "agentleman", "waits for exact ACTIVE session"} {
+	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "session-create", "redeem-0123456789abcdef0123456789abcdef", "session-supervisor", "--session-id", "attach-local", "--workspace", "agentleman", "waits for exact ACTIVE session"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("dry-run missing %q: %s", want, out.String())
 		}
@@ -811,8 +811,8 @@ func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 			t.Fatalf("dry-run contains fallback %q: %s", forbidden, out.String())
 		}
 	}
-	if strings.Count(out.String(), "'--create'") != 1 {
-		t.Fatalf("only the Overton creator may receive --create: %s", out.String())
+	if strings.Contains(out.String(), "--create") || strings.Count(out.String(), "session-create") != 1 {
+		t.Fatalf("only one explicit source creation invocation is allowed: %s", out.String())
 	}
 }
 
@@ -841,7 +841,7 @@ func (runner *newCLIRunner) Run(ctx context.Context, command mirror.Command) err
 func TestExecuteMirrorNewRunsCreatorThenOneBoundedBestEffortHelper(t *testing.T) {
 	const session = "redeem-0123456789abcdef0123456789abcdef"
 	creator, err := mirror.PlanNew(session, mirror.LaunchConfig{
-		SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned",
+		SourceHost: "lattice", SSHCommand: "ssh", LauncherCommand: "kitty", AppID: "owned", SelfCommand: "redeem", SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, SessionID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -857,7 +857,7 @@ func TestExecuteMirrorNewRunsCreatorThenOneBoundedBestEffortHelper(t *testing.T)
 	if creatorErr != nil || sourceErr == nil || len(runner.runs) != 2 || !strings.Contains(sourceErr.Error(), "source helper unavailable") {
 		t.Fatalf("creatorErr=%v sourceErr=%v calls=%#v", creatorErr, sourceErr, runner.runs)
 	}
-	if !strings.Contains(strings.Join(runner.runs[0].Args, " "), "--create") || strings.Contains(strings.Join(runner.runs[1].Args, " "), "--create") {
+	if !strings.Contains(strings.Join(runner.runs[0].Args, " "), "session-supervisor") || strings.Contains(strings.Join(runner.runs[0].Args, " "), "--create") || strings.Contains(strings.Join(runner.runs[1].Args, " "), "--create") {
 		t.Fatalf("creation boundary violated: %#v", runner.runs)
 	}
 
@@ -897,7 +897,7 @@ func TestMirrorOpenInteractivePickerIntegrationAndCancellation(t *testing.T) {
 	defer func() { chooseMirrorSessions = original }()
 
 	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
-	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","workspace_name":"Dev","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","workspace_name":"Chat","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","active_zellij_sessions":["alpha","beta"],"active_zellij_session_ids":{"alpha":"ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","beta":"ses_BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","workspace_name":"Dev","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","workspace_name":"Chat","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
 	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -936,7 +936,7 @@ func TestMirrorOpenNoninteractiveFlagsBypassPickerAndPreserveOrdering(t *testing
 	}
 
 	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
-	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
+	payload := `{"host":"source","profile":"default","generated_at":"2026-07-10T12:00:00Z","active_zellij_sessions":["alpha","beta"],"active_zellij_session_ids":{"alpha":"ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","beta":"ses_BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},"windows":[{"order":0,"source_window_id":1,"app_id":"kitty","title":"first","zellij_session":"alpha","terminal":{"cwd":"/tmp/a","zellij_session":"alpha"}},{"order":1,"source_window_id":2,"app_id":"kitty","title":"second","zellij_session":"beta","terminal":{"cwd":"/tmp/b","zellij_session":"beta"}}]}`
 	if err := os.WriteFile(snapshotPath, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}

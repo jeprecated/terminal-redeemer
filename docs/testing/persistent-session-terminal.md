@@ -89,8 +89,9 @@ Selection, manual-close policy, lifetime caps and follow's lock remain unchanged
 The helper-local/clipboard boundary passed full Go tests, targeted races, three
 PTY/clipboard repetitions, vet and a local Nix build. Ownership integration has
 separate complete-tree, wrapper, ambiguous-helper, foreign-peer, PID-reuse and
-connected/offline save/deduplication regressions. Public launches are still direct
-SSH until the remaining launch and create-once integration is complete.
+connected/offline save/deduplication regressions. Public launches now use the shared supervisor planner; creation completes and
+returns an exact receipt before `mirror new` opens its view. See the final
+[launch/acceptance evidence](persistent-mirror-reconnect.md).
 
 ## Terminal and process lifecycle
 

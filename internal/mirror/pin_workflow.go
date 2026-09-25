@@ -229,6 +229,15 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			}
 		}
 	}
+	// Dry-run must not describe a name-only source as launchable either.
+	for i := range result.Items {
+		item := &result.Items[i]
+		if item.Status == ApplyReady {
+			if _, err := cfg.Snapshot.ExactSessionID(item.Session); err != nil {
+				item.Status, item.Reason = ApplyFailed, err.Error()
+			}
+		}
+	}
 	if cfg.DryRun {
 		return result, nil
 	}
@@ -263,7 +272,12 @@ func ApplyPinned(ctx context.Context, cfg ApplyConfig, deps ApplyDeps) (result A
 			continue
 		}
 		window := Window{Order: item.Order, Title: item.Session, ZellijSession: item.Session, Terminal: &Terminal{CWD: item.RemoteCWD, ZellijSession: item.Session}}
-		plan, err := PlanLaunch(window, LaunchConfig{SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token})
+		id, err := cfg.Snapshot.ExactSessionID(item.Session)
+		if err != nil {
+			item.Status, item.Reason = ApplyFailed, err.Error()
+			continue
+		}
+		plan, err := PlanLaunch(window, LaunchConfig{SessionID: id, SelfCommand: cfg.SelfCommand, SnapshotCommand: cfg.SnapshotCommand, SourceHost: cfg.SourceHost, SSHCommand: cfg.SSHCommand, SSHOptions: cfg.SSHOptions, LauncherCommand: cfg.LauncherCommand, AppID: cfg.AppID, CorrelationToken: token})
 		if err != nil {
 			item.Status, item.Reason = ApplyFailed, err.Error()
 			continue

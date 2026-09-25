@@ -90,7 +90,7 @@ func TestDiscoverFiltersOrdersAndDeduplicatesExactSessions(t *testing.T) {
 
 func TestPlanLaunchAttachMetadata(t *testing.T) {
 	window := Window{Order: 4, SourceWindowID: 9, Title: "Project\nTitle", ZellijSession: "bad'; echo owned", Terminal: &Terminal{CWD: "/tmp/a'b"}}
-	cfg := LaunchConfig{SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Socket: "unix:/tmp/redeem.sock", Clipboard: true}
+	cfg := LaunchConfig{SessionID: recoveryRequest(0).SessionID, SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, CorrelationToken: recoveryRequest(0).Token, SourceHost: "source", SSHCommand: "ssh", SSHOptions: []string{"-o", "BatchMode=yes"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror", Socket: "unix:/tmp/redeem.sock", Clipboard: true}
 	plan, err := PlanLaunch(window, cfg)
 	if err != nil {
 		t.Fatalf("plan attach: %v", err)
@@ -99,36 +99,40 @@ func TestPlanLaunchAttachMetadata(t *testing.T) {
 		t.Fatalf("metadata lost: %#v", plan)
 	}
 	rendered := strings.Join(plan.Command.Args, " ")
-	if !strings.Contains(rendered, "'env' '-u' 'ZELLIJ'") || !strings.Contains(rendered, "'zellij'") || !strings.Contains(rendered, "'attach'") || !strings.Contains(rendered, "'options' '--on-force-close' 'detach'") {
-		t.Fatalf("missing exact attach/env scrub/detach policy: %s", rendered)
+	for _, want := range []string{"session-supervisor", "--session-id " + cfg.SessionID, "--token " + cfg.CorrelationToken, "--projection-token", "--remote-json"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("missing persistent identity/input binding %q: %s", want, rendered)
+		}
 	}
-	if strings.Contains(rendered, "'--create'") {
-		t.Fatalf("existing-session attach must not create: %s", rendered)
+	if strings.Contains(rendered, "--create") || strings.Contains(rendered, "--kitty-to") || strings.Contains(rendered, "cd --") {
+		t.Fatalf("legacy launch or unqualified input path: %s", rendered)
 	}
-	if !strings.Contains(rendered, `'bad'"'"'; echo owned'`) || !strings.Contains(rendered, `cd -- '/tmp/a'"'"'b'`) {
-		t.Fatalf("untrusted metadata was not quoted: %s", rendered)
-	}
-	if plan.Command.Args[len(plan.Command.Args)-3] != "--" || plan.Command.Args[len(plan.Command.Args)-2] != "source" {
-		t.Fatalf("SSH host boundary missing: %#v", plan.Command.Args)
+	argv := launchSSHArgv(t, plan) // extracts the executable after Kitty's -e
+	if len(argv) != 11 || argv[0] != "redeem" || argv[6] != window.ZellijSession {
+		t.Fatalf("literal supervisor argv lost: %+v", argv)
 	}
 }
 
-func TestPlanNewCreatesOnlyGeneratedExactSessionAndDetaches(t *testing.T) {
-	cfg := LaunchConfig{SourceHost: "user@lattice", SSHCommand: "ssh", SSHOptions: []string{"-p", "2222"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror"}
+func TestPlanNewRequiresReceiptAndNeverCreates(t *testing.T) {
+	cfg := LaunchConfig{SessionID: recoveryRequest(0).SessionID, SnapshotCommand: []string{"redeem", "mirror", "snapshot"}, SourceHost: "user@lattice", SSHCommand: "ssh", SSHOptions: []string{"-p", "2222"}, LauncherCommand: "kitty", SelfCommand: "redeem", AppID: "redeem-mirror"}
 	plan, err := PlanNew("redeem-0123456789abcdef0123456789abcdef", cfg)
 	if err != nil {
 		t.Fatalf("plan new: %v", err)
 	}
 	rendered := strings.Join(plan.Command.Args, " ")
-	for _, want := range []string{"'zellij' 'attach' '--create' 'redeem-0123456789abcdef0123456789abcdef'", "'options' '--on-force-close' 'detach'"} {
+	for _, want := range []string{"session-supervisor", "--session redeem-0123456789abcdef0123456789abcdef", "--session-id " + cfg.SessionID} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("new launch missing %q: %s", want, rendered)
 		}
 	}
-	for _, forbidden := range []string{"${SHELL", "exec sh", "exec bash", "||"} {
+	for _, forbidden := range []string{"--create", "${SHELL", "exec sh", "exec bash", "||"} {
 		if strings.Contains(rendered, forbidden) {
 			t.Fatalf("new launch contains fallback %q: %s", forbidden, rendered)
 		}
+	}
+	cfg.SessionID = ""
+	if _, err := PlanNew("redeem-0123456789abcdef0123456789abcdef", cfg); err == nil {
+		t.Fatal("new view accepted missing creation receipt")
 	}
 	if _, err := PlanNew("existing-session", cfg); err == nil {
 		t.Fatal("arbitrary existing name was accepted for create")
