@@ -120,7 +120,7 @@ func TestSessionCreateProcessHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestRealPinnedZellijCreationReceiptAttachesExactly(t *testing.T) {
+func TestRealZellijCreationReceiptAttachesExactly(t *testing.T) {
 	f := realAttachmentFixture(t)
 	const name = "redeem-0123456789abcdef0123456789abcdef"
 	t.Cleanup(func() {

@@ -15,11 +15,11 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/procmeta"
 )
 
-func TestRunBoundedKillsPipeHoldingDescendantsOnContextExpiry(t *testing.T) {
+func TestRunSeparatedKillsPipeHoldingDescendantsOnContextExpiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err := runBounded(ctx, "sh", []string{"-c", "sleep 5 & wait"}, nil)
+	_, _, err := runSeparated(ctx, "sh", []string{"-c", "sleep 5 & wait"}, nil)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context deadline", err)
 	}
@@ -78,7 +78,7 @@ func TestCommandCatalogClassifiesActiveDeadPrefixAndNeverAttaches(t *testing.T) 
 	}
 	logPath := filepath.Join(root, "args.log")
 	script := filepath.Join(root, "zellij")
-	content := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + logPath + "'\nif [ \"$1\" = --version ]; then echo 'zellij " + PinnedVersion + "'; exit 0; fi\necho project-long\n"
+	content := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + logPath + "'\necho project-long\n"
 	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestCommandCatalogRejectsDuplicateListing(t *testing.T) {
 	}
 	defer listener.Close()
 	script := filepath.Join(root, "zellij")
-	content := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + PinnedVersion + "'; else printf 'dup\\ndup\\n'; fi\n"
+	content := "#!/bin/sh\nprintf 'dup\\ndup\\n'\n"
 	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestProcObserverFindsChildCreatedByNonLeaderThread(t *testing.T) {
 	}
 }
 
-func TestExactProcessAndVersionBasenamesRejectNearMatches(t *testing.T) {
+func TestExactProcessBasenamesRejectNearMatches(t *testing.T) {
 	root := t.TempDir()
 	process := writeProcFixture(t, root, 1, 0, "notkitty", nil, nil)
 	if err := os.Symlink("/bin/notkitty", filepath.Join(process, "exe")); err != nil {
@@ -235,17 +235,6 @@ func TestExactProcessAndVersionBasenamesRejectNearMatches(t *testing.T) {
 	}
 	if _, ok := procmeta.ExactZellijAttachSession([]string{"zellij-helper", "attach", "--", "project"}); ok {
 		t.Fatal("zellij-helper accepted")
-	}
-	base := filepath.Join(t.TempDir(), "sockets")
-	if err := os.MkdirAll(filepath.Join(base, SocketContractDir), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	script := filepath.Join(t.TempDir(), "zellij")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.30'; else exit 0; fi\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := (CommandCataloger{Command: script, SocketBase: base, CacheHome: t.TempDir(), BootID: "boot", UID: os.Getuid()}).Observe(context.Background()); err == nil {
-		t.Fatal("near-match Zellij version accepted")
 	}
 }
 
@@ -267,7 +256,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 		}
 		defer listener.Close()
 		script := filepath.Join(root, "zellij")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij "+PinnedVersion+"'; exit 0; fi\nexit 1\n"), 0o700); err != nil {
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := (CommandCataloger{Command: script, SocketBase: base, CacheHome: filepath.Join(root, "cache"), BootID: "boot", UID: os.Getuid()}).Observe(context.Background()); err == nil {
@@ -281,7 +270,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij "+PinnedVersion+"'; fi\nexit 0\n"), 0o700); err != nil {
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		catalog, err := (CommandCataloger{Command: script, SocketBase: base, CacheHome: filepath.Join(root, "cache"), BootID: "boot", UID: os.Getuid()}).Observe(context.Background())
@@ -296,7 +285,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij "+PinnedVersion+"'; else echo missing; fi\n"), 0o700); err != nil {
+		if err := os.WriteFile(script, []byte("#!/bin/sh\necho missing\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		catalog, err := (CommandCataloger{Command: script, SocketBase: base, CacheHome: filepath.Join(root, "cache"), BootID: "boot", UID: os.Getuid()}).Observe(context.Background())
@@ -317,7 +306,7 @@ func TestCommandCatalogFailureSingletonAndScannerTaxonomy(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := filepath.Join(root, "zellij")
-		content := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + PinnedVersion + "'; else printf '%070000d\\n' 0; fi\n"
+		content := "#!/bin/sh\nprintf '%070000d\\n' 0\n"
 		if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -370,7 +359,7 @@ func TestCommandCatalogPropagatesDeadSessionCatalogReadFailures(t *testing.T) {
 		}
 		cache := filepath.Join(root, "cache")
 		script := filepath.Join(root, "zellij")
-		if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij "+PinnedVersion+"'; fi\nexit 0\n"), 0o700); err != nil {
+		if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		return base, cache, script

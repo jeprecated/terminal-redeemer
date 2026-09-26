@@ -37,7 +37,7 @@ Final code revision **`d51b4e074f28`** passed the complete post-cutover gate:
 ```sh
 go test ./...
 go test -race ./internal/mirror ./internal/procmeta ./internal/zellijlive ./cmd/redeem
-go test -race ./internal/mirror -run '^Test(SessionRecovery(ThirtyProcessesShareBlockedProbe|StaleSocketAndIdentityIsolation|RejectsDeadPeerWithRetainedSocket|ControlDisconnectRetainsPendingCapacity|RestartPreservesProbeAndPendingBounds)|SessionSupervisor|RealPinnedZellij|SessionLocalOrigin|PasteBridgeUpload|SessionInputPaste|SessionGate|SessionTerminalWrite)' -v -count=3
+go test -race ./internal/mirror -run '^Test(SessionRecovery(ThirtyProcessesShareBlockedProbe|StaleSocketAndIdentityIsolation|RejectsDeadPeerWithRetainedSocket|ControlDisconnectRetainsPendingCapacity|RestartPreservesProbeAndPendingBounds)|SessionSupervisor|RealZellij|SessionLocalOrigin|PasteBridgeUpload|SessionInputPaste|SessionGate|SessionTerminalWrite)' -v -count=3
 go vet ./...
 nix build .#terminal-redeemer --no-link --builders '' --max-jobs 1 --cores 2
 ```
@@ -65,8 +65,8 @@ changes. Final follow-up changes only record this validation evidence.
 | Complete ownership, wrapped executables, no double-counted transport | `TestSupervisorProjectionOfflineOwnershipAndTransportDescendant`, `TestTwoSupervisorsUnderOneWindowRemainAmbiguous`, complete-tree/PID-reuse regressions |
 | One creation; lost receipt never adopted/replayed | `TestSessionCreationRunsOnceAndRequiresReceipt`, `TestRemoteCreationLostOrWrongReceiptNeverRetries` |
 | CLI receipt precedes view; source-view failure preserves it | `TestMirrorNewCreationReceiptPrecedesViewAndNeverReplays` |
-| Actual headless creation returns a usable exact identity | `TestRealPinnedZellijCreationReceiptAttachesExactly` |
-| Original incarnation and actual rendered-client readiness | [Exact attachment evidence](exact-mirror-attachment.md) and `TestRealPinnedZellij*` |
+| Actual headless creation returns a usable exact identity | `TestRealZellijCreationReceiptAttachesExactly` |
+| Original incarnation and actual rendered-client readiness | [Exact attachment evidence](exact-mirror-attachment.md) and `TestRealZellij*` |
 | Discard offline/connecting input, partial paste, stale grants and delayed clipboard | [Terminal evidence](persistent-session-terminal.md); `TestSessionSupervisor*`, `TestSessionInputPasteKeepsOriginAcrossEverySplit`, `TestSessionGateDoesNotFlushUnreadPasteStart`, `TestSessionLocalOriginRejectsOfflineConnectingAndDelayedPaste`, `TestPasteBridgeUploadAndFallbackKeepOriginalAttachment` |
 | Thirty processes, one probe, two pending slots, retry coalescing and safe daemon restart | [Shared recovery evidence](shared-mirror-recovery.md); `TestSessionRecoveryThirtyProcessesShareBlockedProbe`, `TestSessionRecoveryRestartPreservesProbeAndPendingBounds` and companion cross-process tests |
 
@@ -77,7 +77,8 @@ fixtures prove command sequencing and boundaries, not physical GUI continuity.
 ## Runtime requirements and source-first upgrade
 
 - Source Redeem must provide exact snapshot/catalog IDs, attachment and creation
-  helpers; Zellij is pinned to **0.44.3**. Socket birth time from Linux `statx` is
+  helpers; Zellij is selected from the source machine's `PATH`, without a version
+  pin. Unsupported CLI/IPC behavior fails closed. Socket birth time from Linux `statx` is
   mandatory. Unsupported version/filesystem observations are errors, not absence.
 - Viewer runtime uses owner-only local sockets/files and same-UID kernel pidfd
   authentication (`SO_PEERPIDFD`, Linux **6.5+**). Aliases are not merged; the full

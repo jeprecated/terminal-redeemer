@@ -73,10 +73,12 @@ func RunSessionAttachment(ctx context.Context, cfg SessionAttachConfig) (string,
 	}
 	startupCtx, cancelStartup := context.WithTimeout(ctx, cfg.StartupTimeout)
 	defer cancelStartup()
-	if err := zellijlive.VerifyVersion(startupCtx, cfg.Command); err != nil {
-		if ctx.Err() != nil {
-			return "cancelled", ctx.Err()
-		}
+	if ctx.Err() != nil {
+		return "cancelled", ctx.Err()
+	}
+	// Use the source machine's command, without a release/version gate.
+	// The relay still requires exact socket identity and real attach/render IPC.
+	if _, err := exec.LookPath(cfg.Command); err != nil {
 		return "unsupported", err
 	}
 	boot, err := bootid.Current()

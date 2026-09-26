@@ -27,7 +27,7 @@ func TestCatalogPreservesLiteralSocketNamesAndBootIdentity(t *testing.T) {
 		t.Cleanup(func() { _ = listener.Close() })
 	}
 	script := filepath.Join(root, "zellij")
-	body := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + PinnedVersion + "'; exit 0; fi\n[ \"$*\" = 'list-sessions --short --no-formatting' ] || exit 9\nprintf '%s\\n' '-Agent' 'Agent workspace' 'agent' 'No active zellij sessions found.'\n"
+	body := "#!/bin/sh\n[ \"$*\" = 'list-sessions --short --no-formatting' ] || exit 9\nprintf '%s\\n' '-Agent' 'Agent workspace' 'agent' 'No active zellij sessions found.'\n"
 	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestCatalogAcceptsOnlyPinnedEmptyResult(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			script := filepath.Join(root, "zellij")
-			body := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + PinnedVersion + "'; exit 0; fi\n" + tc.body + "\n"
+			body := "#!/bin/sh\n" + tc.body + "\n"
 			if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 				t.Fatal(err)
 			}

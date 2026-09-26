@@ -37,15 +37,18 @@ For a single attachment, the source helper:
 
 ## Positive readiness, not a delay
 
-Pinned upstream: Zellij **0.44.3**, commit
-[`55a2121b73dce4be624cda425a960e893000777c`](https://github.com/zellij-org/zellij/tree/55a2121b73dce4be624cda425a960e893000777c).
+Redeemer uses the source machine's `zellij` from `PATH`: no release pin,
+version probe, or release allowlist. Compatibility is checked through actual
+CLI results, socket identity and attach/render messages, not a version string.
+The protocol references below were reviewed against Zellij **0.45.1**; that is
+validation evidence, not a runtime requirement.
 
-- [IPC framing](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-utils/src/ipc.rs#L394-L416): little-endian 32-bit length followed by protobuf.
-- [Client oneof](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-utils/src/client_server_contract/client_to_server.proto#L6-L29): `AttachClient` is field 8; `ConnStatus` is field 13; creation is field 7.
-- [Server oneof](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-utils/src/client_server_contract/server_to_client.proto#L6-L25): `Render` is field 1; `Connected` field 4 can answer a mere status probe.
-- [Attachment handling](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-server/src/lib.rs#L1112-L1187) registers that client and sends `ScreenInstruction::AddClient`.
-- [Screen registration](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-server/src/screen.rs#L7380-L7402) adds it to the screen.
-- [Client rendering](https://github.com/zellij-org/zellij/blob/55a2121b73dce4be624cda425a960e893000777c/zellij-client/src/lib.rs#L1154-L1170) writes and flushes the received render to stdout.
+- [IPC framing](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/ipc.rs#L495-L525): little-endian 32-bit length followed by protobuf.
+- [Client oneof](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/client_server_contract/client_to_server.proto#L6-L36): `AttachClient` is field 8; `ConnStatus` is field 13; creation is field 7. Terminal capability/focus messages through field 27 are understood; session-list request 25 and unknown fields are refused on the attached connection.
+- [Server oneof](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/client_server_contract/server_to_client.proto#L6-L28): `Render` is field 1; `Connected` field 4 can answer a mere status probe.
+- [Attachment handling](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/lib.rs#L1186-L1250) registers that client and sends `ScreenInstruction::AddClient`.
+- [Screen registration](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/screen.rs#L10199-L10232) adds it to the screen.
+- [Client rendering](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-client/src/lib.rs#L1418-L1433) writes and flushes the received render to stdout.
 
 The relay forwards bounded opaque frames (4 MiB maximum), inspecting only the
 single-oneof envelope and narrow lifecycle messages. A preliminary `ConnStatus`
@@ -77,15 +80,16 @@ same-user process. The outcomes distinguish `missing`, `replaced`, `unverifiable
 `unsupported` capability, `invalid` requests, ordinary `failed` attachments,
 `cancelled` attempts and validated `detached` clients. Missing/replaced socket
 observations are advisory, **not** authoritative session-end evidence. Only a complete fresh host inventory can
-establish end. Missing helpers and unsupported versions must never fall back to
+establish end. Missing helpers and unsupported protocol behavior must never fall back to
 name-only attachment. Deploy the source capability before future local cutover.
 
 ## Hermetic verification
 
 Tests use private socket/config/cache/data/runtime/HOME directories, real PTYs,
-and the installed pinned Zellij. They never use the operator's socket namespace.
-Real-Zellij tests explicitly skip when that exact binary is unavailable; a skip
-is not evidence of readiness. Tests include:
+and the installed Zellij. They never use the operator's socket namespace.
+Real-Zellij tests skip only when `zellij` is absent from `PATH`; an installed
+binary with incompatible behavior fails the tests rather than being skipped.
+A skip is not evidence of readiness. Tests include:
 
 - Case-sensitive names with spaces and leading dashes, client-rendered readiness,
   fresh shell input, intentional detach, cancellation and survival of the source
@@ -104,12 +108,12 @@ is not evidence of readiness. Tests include:
 go test ./...
 go test -race ./internal/mirror ./internal/zellijlive ./cmd/redeem
 go test -race ./internal/mirror \
-  -run '^TestRealPinnedZellij' -v -count=3
+  -run '^TestRealZellij' -v -count=3
 go vet ./...
-nix build .#terminal-redeemer --no-link
+nix build path:.#terminal-redeemer --no-link
 ```
 
-Checkpoint results: all commands above passed. All four real-Zellij test groups
+Historical milestone-1 checkpoint (Zellij 0.44.3): all commands above passed. All four real-Zellij test groups
 ran (no skips) in each of the three race repetitions, including both literal-name
 subtests. The package build was forced local with `--builders '' --max-jobs 1
 --cores 2`; the machine's default configuration disables local jobs. Dependency

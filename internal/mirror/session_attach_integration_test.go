@@ -54,12 +54,7 @@ func realAttachmentFixture(t *testing.T) attachFixture {
 	t.Helper()
 	command, err := exec.LookPath("zellij")
 	if err != nil {
-		t.Skip("pinned Zellij unavailable")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := zellijlive.VerifyVersion(ctx, command); err != nil {
-		t.Skip(err)
+		t.Skip("Zellij unavailable")
 	}
 	root, err := os.MkdirTemp("", "ra-real-")
 	if err != nil {
@@ -103,6 +98,16 @@ keybinds {
 		t.Fatal(err)
 	}
 	env = append(env, "HOME="+root, "XDG_RUNTIME_DIR="+runtime, "XDG_CONFIG_HOME="+filepath.Join(root, ".config"), "XDG_CACHE_HOME="+filepath.Join(root, "cache"), "XDG_DATA_HOME="+filepath.Join(root, "data"), "ZELLIJ_SOCKET_DIR="+base, "TERM=xterm-256color")
+	// Also reap unexpected names if a CLI regression creates a different session.
+	// This command sees only this fixture's private socket namespace.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, command, "kill-all-sessions", "--yes")
+		cmd.Env = env
+		cmd.WaitDelay = 200 * time.Millisecond
+		_ = cmd.Run()
+	})
 	return attachFixture{root: root, base: base, command: command, env: env}
 }
 func (f attachFixture) run(t *testing.T, args ...string) []byte {
@@ -120,7 +125,15 @@ func (f attachFixture) run(t *testing.T, args ...string) []byte {
 }
 func (f attachFixture) create(t *testing.T, name string) string {
 	t.Helper()
-	f.run(t, "--layout", filepath.Join(f.root, "layout.kdl"), "attach", "--create-background", "--", name)
+	initial := name
+	if strings.HasPrefix(name, "-") {
+		initial = "leading-name-fixture"
+	}
+	f.run(t, "--layout", filepath.Join(f.root, "layout.kdl"), "attach", "--create-background", initial)
+	if initial != name {
+		// attach's '--' now introduces a pane command, not a literal session name.
+		f.run(t, "--session", initial, "action", "rename-session", "--", name)
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -225,7 +238,27 @@ func (p *attachmentPTY) waitText(t *testing.T, text string) {
 	}
 }
 
-func TestRealPinnedZellijExactAttachmentReadiness(t *testing.T) {
+func TestRealZellijCatalogFindsExactLiveSession(t *testing.T) {
+	f := realAttachmentFixture(t)
+	name := "Case Sensitive"
+	id := f.create(t, name)
+	boot, err := bootid.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	catalog, err := (zellijlive.CommandCataloger{Command: f.command, SocketBase: f.base, CacheHome: filepath.Join(f.root, "cache"), BootID: boot}).Observe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := catalog.Exact(name)
+	if len(catalog.Names) != 1 || session.Status != zellijlive.StatusActive || session.ExactID != id {
+		t.Fatalf("unexpected live catalog: %+v", catalog)
+	}
+}
+
+func TestRealZellijExactAttachmentReadiness(t *testing.T) {
 	f := realAttachmentFixture(t)
 	for _, name := range []string{"Case Sensitive", "-Leading"} {
 		t.Run(name, func(t *testing.T) {
@@ -262,7 +295,7 @@ func TestRealPinnedZellijExactAttachmentReadiness(t *testing.T) {
 	}
 }
 
-func TestRealPinnedZellijCancelledAttachmentPreservesSession(t *testing.T) {
+func TestRealZellijCancelledAttachmentPreservesSession(t *testing.T) {
 	f := realAttachmentFixture(t)
 	id := f.create(t, "cancelled")
 	p := f.attach(t, "cancelled", id)
@@ -286,7 +319,7 @@ func TestRealPinnedZellijCancelledAttachmentPreservesSession(t *testing.T) {
 	}
 }
 
-func TestRealPinnedZellijReplacementDuringAttachmentStaysPinned(t *testing.T) {
+func TestRealZellijReplacementDuringAttachmentStaysPinned(t *testing.T) {
 	f := realAttachmentFixture(t)
 	f.env = append(f.env, "REDEEM_TEST_GENERATION=original")
 	id := f.create(t, "same")
@@ -302,7 +335,7 @@ func TestRealPinnedZellijReplacementDuringAttachmentStaysPinned(t *testing.T) {
 	})
 	gate := filepath.Join(f.root, "release")
 	wrapper := filepath.Join(f.root, "gated-zellij")
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then exec " + QuoteCommand([]string{f.command}) + " \"$@\"; fi\nprintf 'fixture-attachment-paused\\n'\nwhile [ ! -f " + QuoteCommand([]string{gate}) + " ]; do sleep 0.01; done\nexec " + QuoteCommand([]string{f.command}) + " \"$@\"\n"
+	script := "#!/bin/sh\nprintf 'fixture-attachment-paused\\n'\nwhile [ ! -f " + QuoteCommand([]string{gate}) + " ]; do sleep 0.01; done\nexec " + QuoteCommand([]string{f.command}) + " \"$@\"\n"
 	if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +366,7 @@ func TestRealPinnedZellijReplacementDuringAttachmentStaysPinned(t *testing.T) {
 	p.waitText(t, AttachmentMarker(testAttachmentAttempt, "detached"))
 }
 
-func TestRealPinnedZellijReplacementNeverReceivesInput(t *testing.T) {
+func TestRealZellijReplacementNeverReceivesInput(t *testing.T) {
 	f := realAttachmentFixture(t)
 	oldID := f.create(t, "replace")
 	f.run(t, "kill-session", "replace")

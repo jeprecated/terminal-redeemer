@@ -14,7 +14,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
-// The pinned 0.44.3 IPC contract is LE32 length + a single protobuf oneof.
+// Zellij's contract_version_1 IPC is LE32 length + a single protobuf oneof.
 // We inspect only its envelope, never interpret actions/keys/layouts. See
 // docs/testing/exact-mirror-attachment.md for the upstream source contract.
 const maxAttachmentFrame = 4 << 20
@@ -187,7 +187,10 @@ func (r *attachmentRelay) connection(ctx context.Context, client net.Conn) {
 			}
 			// No NewClient, attach replay, independent CLI request or kill-session
 			// authority can pass through this attempt after its initial AttachClient.
-			if kind == 7 || kind == 8 || kind == 12 || kind == 13 || kind == 16 || kind == 0 || kind > 20 {
+			// Fields 21-24 and 26-27 carry keyboard/nested-terminal/graphics/mobile/
+			// focus state; 25 is an independent session-list request. Unknown fields
+			// still fail closed rather than inheriting authority from a version string.
+			if kind == 7 || kind == 8 || kind == 12 || kind == 13 || kind == 16 || kind == 25 || kind == 0 || kind > 27 {
 				r.fail(fmt.Errorf("refused Zellij message %d on attached connection", kind))
 				server.Close()
 				return

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"golang.org/x/sys/unix"
 	"net"
 	"os"
@@ -35,7 +34,7 @@ func TestMirrorSessionCatalogIsHeadlessAndBootBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + zellijlive.PinnedVersion + "'; exit 0; fi\n[ \"$*\" = 'list-sessions --short --no-formatting' ] || exit 8\nprintf '%s\\n' '-Agent'\n"
+	script := "#!/bin/sh\n[ \"$*\" = 'list-sessions --short --no-formatting' ] || exit 8\nprintf '%s\\n' '-Agent'\n"
 	if err := os.WriteFile(filepath.Join(root, "zellij"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +66,7 @@ func TestMirrorSessionCatalogIsHeadlessAndBootBound(t *testing.T) {
 
 func TestMirrorSessionCatalogFailureNeverPublishesEmptyInventory(t *testing.T) {
 	root := t.TempDir()
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + zellijlive.PinnedVersion + "'; exit 0; fi\necho 'permission denied' >&2; exit 1\n"
+	script := "#!/bin/sh\necho 'permission denied' >&2; exit 1\n"
 	if err := os.WriteFile(filepath.Join(root, "zellij"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +83,7 @@ func TestMirrorSessionCatalogFailureNeverPublishesEmptyInventory(t *testing.T) {
 
 func TestMirrorSessionCatalogBoundsBlockedSubprocess(t *testing.T) {
 	root := t.TempDir()
-	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij " + zellijlive.PinnedVersion + "'; exit 0; fi\nsleep 30 & wait\n"
+	script := "#!/bin/sh\nsleep 30 & wait\n"
 	if err := os.WriteFile(filepath.Join(root, "zellij"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -99,16 +98,9 @@ func TestMirrorSessionCatalogBoundsBlockedSubprocess(t *testing.T) {
 	}
 }
 
-func TestRealPinnedZellijEmptyCatalogIsAuthoritative(t *testing.T) {
-	binary, err := exec.LookPath("zellij")
-	if err != nil {
-		t.Skip("pinned Zellij is unavailable")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	version, err := exec.CommandContext(ctx, binary, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "zellij "+zellijlive.PinnedVersion {
-		t.Skip("pinned Zellij is unavailable")
+func TestRealZellijEmptyCatalogIsAuthoritative(t *testing.T) {
+	if _, err := exec.LookPath("zellij"); err != nil {
+		t.Skip("Zellij is unavailable")
 	}
 	root := t.TempDir()
 	// Override both catalogs; never list or mutate the user's actual sessions.

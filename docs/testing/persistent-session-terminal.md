@@ -129,7 +129,7 @@ Real PTYs and isolated test processes cover:
 go test ./...
 go test -race ./internal/mirror ./internal/zellijlive ./cmd/redeem
 go test -race ./internal/mirror \
-  -run '^Test(SessionSupervisor|SessionTerminalWrite|SessionTransportBounds|SessionInputPaste|SessionGate|AttachmentOutput|RealPinnedZellij)' \
+  -run '^Test(SessionSupervisor|SessionTerminalWrite|SessionTransportBounds|SessionInputPaste|SessionGate|AttachmentOutput|RealZellij)' \
   -v -count=3
 go vet ./...
 nix build .#terminal-redeemer --no-link --builders '' --max-jobs 1 --cores 2

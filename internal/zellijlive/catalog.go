@@ -22,7 +22,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const PinnedVersion = "0.44.3"
 const SocketContractDir = "contract_version_1"
 const MaxSocketPathBytes = 107
 const MaxCatalogBytes = 1 << 20
@@ -61,9 +60,6 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	if err := verifyOwnedDirectory(contractDir, uid); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Catalog{}, fmt.Errorf("validate Zellij contract socket directory: %w", err)
 	}
-	if err := VerifyVersion(ctx, command); err != nil {
-		return Catalog{}, err
-	}
 	emptyCache, err := os.MkdirTemp("", "redeem-zellij-catalog-cache-*")
 	if err != nil {
 		return Catalog{}, err
@@ -71,7 +67,7 @@ func (cataloger CommandCataloger) Observe(ctx context.Context) (Catalog, error) 
 	defer os.RemoveAll(emptyCache)
 	environment := scrubEnv(os.Environ(), map[string]string{"ZELLIJ_SOCKET_DIR": base, "XDG_CACHE_HOME": emptyCache})
 	out, diagnostic, commandErr := runSeparated(ctx, command, []string{"list-sessions", "--short", "--no-formatting"}, environment)
-	// Pinned Zellij reports an empty live catalog on stderr with exit 1.
+	// Zellij reports an empty live catalog on stderr with exit 1.
 	// No other failure (or extra output) may authorize an empty inventory.
 	var exitErr *exec.ExitError
 	empty := ctx.Err() == nil && errors.As(commandErr, &exitErr) && exitErr.ExitCode() == 1 && len(out) == 0 && string(diagnostic) == "No active zellij sessions found.\n"
@@ -185,15 +181,6 @@ func DefaultSocketBase(uid int) string {
 	return filepath.Join(runtime, "zellij")
 }
 
-// VerifyVersion bounds output and requires the exact supported IPC contract.
-func VerifyVersion(ctx context.Context, command string) error {
-	out, err := runBounded(ctx, command, []string{"--version"}, nil)
-	if err != nil || strings.TrimSpace(string(out)) != "zellij "+PinnedVersion {
-		return fmt.Errorf("pinned Zellij %s is unavailable", PinnedVersion)
-	}
-	return nil
-}
-
 func verifyOwnedDirectory(path string, uid int) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -250,11 +237,6 @@ func (output *boundedOutput) Write(payload []byte) (int, error) {
 		return 0, fmt.Errorf("command output exceeds bound")
 	}
 	return output.Buffer.Write(payload)
-}
-
-func runBounded(ctx context.Context, command string, args []string, environment []string) ([]byte, error) {
-	output, diagnostic, err := runSeparated(ctx, command, args, environment)
-	return append(output, diagnostic...), err
 }
 
 func runSeparated(ctx context.Context, command string, args []string, environment []string) ([]byte, []byte, error) {

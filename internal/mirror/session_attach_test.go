@@ -20,7 +20,7 @@ func TestSessionAttachmentRequiresPositiveReadinessNotElapsedTimeOrStdout(t *tes
 	base, id, _ := attachmentSocketFixture(t, "s", boot)
 	command := filepath.Join(t.TempDir(), "zellij")
 	// A live process emitting terminal output is not evidence of attachment.
-	if err := os.WriteFile(command, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; exit; fi\necho ordinary-startup-output\nexec sleep 10\n"), 0700); err != nil {
+	if err := os.WriteFile(command, []byte("#!/bin/sh\n[ \"$*\" = 'attach session options --on-force-close detach' ] || exit 2\necho ordinary-startup-output\nexec sleep 10\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	input, err := os.Open(os.DevNull)
@@ -51,13 +51,10 @@ func TestSessionAttachmentSeparatesUnsupportedAndUnverifiable(t *testing.T) {
 	base, id, _ := attachmentSocketFixture(t, "s", boot)
 	command := filepath.Join(t.TempDir(), "zellij")
 	cfg := SessionAttachConfig{Command: command, SocketBase: base, Session: "s", SessionID: id, Attempt: testAttachmentAttempt, StartupTimeout: time.Second}
-	if err := os.WriteFile(command, []byte("#!/bin/sh\necho 'zellij unsupported'\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
 	if status, err := RunSessionAttachment(context.Background(), cfg); status != "unsupported" || err == nil {
-		t.Fatalf("unsupported version: %s %v", status, err)
+		t.Fatalf("missing command: %s %v", status, err)
 	}
-	if err := os.WriteFile(command, []byte("#!/bin/sh\necho 'zellij 0.44.3'\n"), 0700); err != nil {
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(base, "contract_version_1", "s")

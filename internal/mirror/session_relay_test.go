@@ -130,8 +130,25 @@ func TestRelayReadinessRequiresAttachAndRenderOnSameConnection(t *testing.T) {
 	}
 }
 
+func TestRelayForwardsTerminalCapabilityAndFocusMessages(t *testing.T) {
+	_, server, dial := relayFixture(t)
+	client := dial()
+	writeAttachmentFrame(client, attachmentFrame(8, nil))
+	peer := acceptRelay(t, server)
+	readFrameKind(t, peer, 8)
+	for _, kind := range []uint64{21, 22, 23, 24, 26, 27} {
+		body := []byte{8, 1}
+		if err := writeAttachmentFrame(client, attachmentFrame(kind, body)); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(readFrameKind(t, peer, kind), body) {
+			t.Fatalf("changed payload for message %d", kind)
+		}
+	}
+}
+
 func TestRelayRejectsCreationAndAttachmentReplay(t *testing.T) {
-	for _, kind := range []uint64{7, 8, 12, 13, 16} {
+	for _, kind := range []uint64{7, 8, 12, 13, 16, 25, 28} {
 		t.Run(string(rune('a'+kind)), func(t *testing.T) {
 			r, s, dial := relayFixture(t)
 			c := dial()

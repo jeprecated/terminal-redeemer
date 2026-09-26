@@ -31,7 +31,9 @@ func RunSessionCreation(ctx context.Context, session string) (CreatedSession, er
 	return createSessionOnce(ctx, session, observer, func(ctx context.Context) (string, error) {
 		base := zellijlive.DefaultSocketBase(os.Getuid())
 		env := sessionCreationEnv(os.Environ(), base)
-		_, err := boundedSessionCatalog(ctx, ExecRunner{Env: env}, Command{Name: "zellij", Args: []string{"attach", "--create-background", "--", session}})
+		// The generated name cannot start with '-'. Do not insert '--': newer
+		// Zellij treats everything after it as an initial pane command.
+		_, err := boundedSessionCatalog(ctx, ExecRunner{Env: env}, Command{Name: "zellij", Args: []string{"attach", "--create-background", session}})
 		if err != nil {
 			return "", err
 		}

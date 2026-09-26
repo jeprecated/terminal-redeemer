@@ -435,7 +435,7 @@ func configureFakeZellij(t *testing.T) {
 	t.Helper()
 	root := t.TempDir()
 	command := filepath.Join(root, "zellij")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; fi\nexit 0\n"), 0o700); err != nil {
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -665,7 +665,7 @@ func TestDoctorPassExitCode(t *testing.T) {
 		cmdPath := filepath.Join(pathDir, cmd)
 		payload := "#!/bin/sh\nexit 0\n"
 		if cmd == "zellij" {
-			payload = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'zellij 0.44.3'; fi\nexit 0\n"
+			payload = "#!/bin/sh\nexit 0\n"
 		}
 		err := os.WriteFile(cmdPath, []byte(payload), 0o700)
 		if err != nil {
