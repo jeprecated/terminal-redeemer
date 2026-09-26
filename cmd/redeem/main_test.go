@@ -124,6 +124,7 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 		{name: "mirror status", args: []string{"mirror", "status", "--help"}},
 		{name: "mirror close", args: []string{"mirror", "close", "--help"}},
 		{name: "mirror paste-image", args: []string{"mirror", "paste-image", "--help"}},
+		{name: "mirror forward", args: []string{"mirror", "forward", "--help"}},
 		{name: "resume", args: []string{"resume", "--help"}},
 		{name: "prune run", args: []string{"prune", "run", "--help"}},
 	}

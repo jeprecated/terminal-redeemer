@@ -183,6 +183,8 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		return runMirrorClose(args[1:], resolvedConfig, stdout, stderr)
 	case "paste-image":
 		return runMirrorPaste(args[1:], resolvedConfig, stdout, stderr)
+	case "forward":
+		return runMirrorForward(args[1:], resolvedConfig, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown mirror subcommand: %s\n", args[0])
 		return 2
@@ -928,6 +930,43 @@ func runMirrorClose(args []string, resolvedConfig config.Config, stdout io.Write
 	return 0
 }
 
+func runMirrorForward(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("mirror forward", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	host := fs.String("host", resolvedConfig.Mirror.SourceHost, "SSH source host")
+	sshCommand := fs.String("ssh-command", resolvedConfig.Mirror.SSHCommand, "SSH executable")
+	sshOptions := repeatFlag{values: append([]string(nil), resolvedConfig.Mirror.SSHOptions...)}
+	fs.Var(&sshOptions, "ssh-option", "SSH option (repeatable; first occurrence replaces config)")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 1 {
+		writeln(stderr, "usage: redeem mirror forward [flags] <remote-port|remote-path>")
+		return 2
+	}
+	plan, err := mirror.PlanForward(mirror.ForwardConfig{
+		Host: strings.TrimSpace(*host), SSHCommand: *sshCommand, SSHOptions: sshOptions.values, Target: fs.Arg(0),
+	}, mirror.FreeLocalPort)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror forward failed: %v\n", err)
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := mirror.StartForward(ctx, plan); err != nil {
+		_, _ = fmt.Fprintf(stderr, "mirror forward failed: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, plan.URL)
+	if err := mirror.OpenURL("xdg-open", plan.URL); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: open browser: %v\n", err)
+	}
+	return 0
+}
+
 func runMirrorPaste(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror paste-image", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -1458,6 +1497,7 @@ func printMirrorHelp(w io.Writer) {
 	writeln(w, "  status       Inspect one exact locally active Zellij session")
 	writeln(w, "  close        Close only positively verified owned mirror windows")
 	writeln(w, "  paste-image  Copy and display one clipboard image through the mirror bridge")
+	writeln(w, "  forward      Open a remote port or file in the local browser via a self-closing tunnel")
 }
 
 func localInstallPath() string {

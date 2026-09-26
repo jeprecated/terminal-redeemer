@@ -52,6 +52,8 @@ redeem mirror close --host lattice
 redeem mirror paste-image
 ```
 
+To open a remote service or file in the local browser, run `redeem mirror forward --host lattice 5173` (a remote port) or `redeem mirror forward --host lattice ~/proj/report.html` (a remote file or directory, served by the source's `python3`). Redeem picks a free local port, waits until the remote end answers HTTP, prints the URL and runs `xdg-open`. Each forward is a detached `ssh -L` that closes itself: a port tunnel stays up for 5 minutes and then until its last connection closes; a file server exits after 5 minutes without a request. There is nothing to list or clean up.
+
 ## Terminal recovery
 
 ```bash
