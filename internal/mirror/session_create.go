@@ -46,10 +46,17 @@ func RunSessionCreation(ctx context.Context, session string) (CreatedSession, er
 
 // sessionCreationEnv pins Zellij to the socket base the receipt is read from;
 // Zellij's own fallback without XDG_RUNTIME_DIR differs from DefaultSocketBase.
+// Non-interactive creation also needs a usable TERM before the first pane's
+// shell starts: later terminal attachments cannot fix its inherited environment.
 func sessionCreationEnv(environ []string, base string) []string {
 	env := []string{}
+	term := ""
 	for _, entry := range environ {
-		key, _, _ := strings.Cut(entry, "=")
+		key, value, _ := strings.Cut(entry, "=")
+		if key == "TERM" {
+			term = value
+			continue
+		}
 		scrub := key == "ZELLIJ_SOCKET_DIR"
 		for _, name := range zellijEnvironment {
 			if key == name {
@@ -61,7 +68,10 @@ func sessionCreationEnv(environ []string, base string) []string {
 			env = append(env, entry)
 		}
 	}
-	return append(env, "ZELLIJ_SOCKET_DIR="+base)
+	if term == "" || term == "dumb" {
+		term = "xterm-256color"
+	}
+	return append(env, "TERM="+term, "ZELLIJ_SOCKET_DIR="+base)
 }
 
 func createSessionOnce(ctx context.Context, session string, observer zellijlive.Cataloger, create func(context.Context) (string, error)) (CreatedSession, error) {

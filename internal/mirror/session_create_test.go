@@ -134,7 +134,9 @@ func TestRealZellijCreationReceiptAttachesExactly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSessionCreateProcessHelper$")
-	cmd.Env = append(append([]string{}, f.env...), "REDEEM_TEST_CREATE="+name, "ZELLIJ=1", "ZELLIJ_SESSION_NAME=foreign")
+	// Creation runs without a terminal over SSH; attaching later cannot repair
+	// the environment of the shell that Zellij already started.
+	cmd.Env = append(append([]string{}, f.env...), "REDEEM_TEST_CREATE="+name, "ZELLIJ=1", "ZELLIJ_SESSION_NAME=foreign", "TERM=")
 	payload, err := cmd.Output()
 	if err != nil {
 		if exit, ok := err.(*exec.ExitError); ok {
@@ -151,6 +153,10 @@ func TestRealZellijCreationReceiptAttachesExactly(t *testing.T) {
 	}
 	p := f.attach(t, name, receipt.SessionID)
 	p.waitText(t, AttachmentMarker(testAttachmentAttempt, "ready"))
+	if _, err := p.file.Write([]byte("printf '__CREATED_TERM=%s__\\n' \"$TERM\"\r")); err != nil {
+		t.Fatal(err)
+	}
+	p.waitText(t, "__CREATED_TERM=xterm-256color__")
 	p.file.Write([]byte{5})
 	p.waitText(t, AttachmentMarker(testAttachmentAttempt, "detached"))
 	// A replay of the source operation refuses the existing generated name.
@@ -161,9 +167,35 @@ func TestRealZellijCreationReceiptAttachesExactly(t *testing.T) {
 	}
 }
 
+func TestSessionCreationTerminalEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{name: "missing", want: "xterm-256color"},
+		{name: "empty", env: []string{"TERM="}, want: "xterm-256color"},
+		{name: "dumb", env: []string{"TERM=dumb"}, want: "xterm-256color"},
+		{name: "existing", env: []string{"TERM=xterm-kitty"}, want: "xterm-kitty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := sessionCreationEnv(tc.env, "/run/user/1000/zellij")
+			var terms []string
+			for _, entry := range env {
+				if strings.HasPrefix(entry, "TERM=") {
+					terms = append(terms, entry)
+				}
+			}
+			if !reflect.DeepEqual(terms, []string{"TERM=" + tc.want}) {
+				t.Fatalf("creation TERM entries = %q, want exactly TERM=%s", terms, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionCreationPinsReceiptSocketBase(t *testing.T) {
 	env := sessionCreationEnv([]string{"PATH=/bin", "ZELLIJ=1", "ZELLIJ_SESSION_NAME=foreign", "ZELLIJ_SOCKET_DIR=/elsewhere"}, "/run/user/1000/zellij")
-	want := []string{"PATH=/bin", "ZELLIJ_SOCKET_DIR=/run/user/1000/zellij"}
+	want := []string{"PATH=/bin", "TERM=xterm-256color", "ZELLIJ_SOCKET_DIR=/run/user/1000/zellij"}
 	if !reflect.DeepEqual(env, want) {
 		t.Fatalf("creation env = %q, want %q", env, want)
 	}
