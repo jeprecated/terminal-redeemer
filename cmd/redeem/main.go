@@ -322,7 +322,9 @@ func runMirrorList(args []string, resolvedConfig config.Config, stdout io.Writer
 	return 0
 }
 
-var chooseMirrorSessions = mirrortui.Run
+var chooseMirrorSessions = mirrortui.RunLoading
+
+var chooseFollowWorkspace = mirrortui.RunWorkspaceLoading
 var newMirrorSessionName = mirror.NewSessionName
 
 func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -507,32 +509,48 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 		_, _ = fmt.Fprintln(stderr, "--all cannot be combined with --session or --select")
 		return 2
 	}
-	snapshot, host, err := acquireMirrorSnapshot(context.Background(), source, *snapshotFile)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", err)
-		return 1
-	}
-	windows := mirror.Discover(snapshot)
-	if len(windows) == 0 {
-		_, _ = fmt.Fprintf(stderr, "no live Zellij sessions found on %s\n", host)
-		return 1
-	}
-	selected := windows
-	switch {
-	case *all:
-	case len(sessions.values) > 0:
-		selected, err = mirror.FilterSessions(windows, sessions.values)
-	case *selectIndex > 0:
-		if *selectIndex > len(windows) {
-			err = fmt.Errorf("--select %d exceeds %d results", *selectIndex, len(windows))
-		} else {
-			selected = windows[*selectIndex-1 : *selectIndex]
+	var snapshot mirror.Snapshot
+	var host string
+	var selected []mirror.Window
+	var err error
+	if !*all && len(sessions.values) == 0 && *selectIndex <= 0 {
+		// The picker paints its loading state first; discovery (SSH) runs
+		// inside it so the terminal is never blank while the source answers.
+		load := func(ctx context.Context) ([]mirror.Window, error) {
+			loaded, loadedHost, loadErr := acquireMirrorSnapshot(ctx, source, *snapshotFile)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			snapshot, host = loaded, loadedHost
+			return mirror.Discover(loaded), nil
 		}
-	default:
 		var cancelled bool
-		selected, cancelled, err = chooseMirrorSessions(windows)
+		selected, cancelled, err = chooseMirrorSessions(strings.TrimSpace(*source.host), load)
 		if cancelled {
 			return 0
+		}
+	} else {
+		snapshot, host, err = acquireMirrorSnapshot(context.Background(), source, *snapshotFile)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", err)
+			return 1
+		}
+		windows := mirror.Discover(snapshot)
+		if len(windows) == 0 {
+			_, _ = fmt.Fprintf(stderr, "no live Zellij sessions found on %s\n", host)
+			return 1
+		}
+		selected = windows
+		switch {
+		case *all:
+		case len(sessions.values) > 0:
+			selected, err = mirror.FilterSessions(windows, sessions.values)
+		default:
+			if *selectIndex > len(windows) {
+				err = fmt.Errorf("--select %d exceeds %d results", *selectIndex, len(windows))
+			} else {
+				selected = windows[*selectIndex-1 : *selectIndex]
+			}
 		}
 	}
 	if err != nil {
@@ -716,19 +734,20 @@ func runMirrorFollow(args []string, resolvedConfig config.Config, stdout io.Writ
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGHUP, syscall.SIGTERM)
 	defer stop()
-	initialCtx, cancel := context.WithTimeout(ctx, *timeout)
-	snapshot, host, err := acquireMirrorSnapshot(initialCtx, source, "")
-	cancel()
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
-		return 1
+	var snapshot mirror.Snapshot
+	var host string
+	// Discovery runs inside the picker, which paints a loading state first.
+	load := func(loadCtx context.Context) ([]mirror.WorkspaceChoice, error) {
+		initialCtx, cancel := context.WithTimeout(loadCtx, *timeout)
+		defer cancel()
+		loaded, loadedHost, loadErr := acquireMirrorSnapshot(initialCtx, source, "")
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		snapshot, host = loaded, loadedHost
+		return mirror.FollowWorkspaceChoices(loaded)
 	}
-	choices, err := mirror.FollowWorkspaceChoices(snapshot)
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "mirror follow failed: %v\n", err)
-		return 1
-	}
-	choice, cancelled, err := mirrortui.RunWorkspaceContext(ctx, choices)
+	choice, cancelled, err := chooseFollowWorkspace(ctx, strings.TrimSpace(*source.host), load)
 	if cancelled || errors.Is(ctx.Err(), context.Canceled) {
 		return 0
 	}

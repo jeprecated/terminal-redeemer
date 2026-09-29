@@ -14,6 +14,7 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/checkpoints"
 	"github.com/jmo/terminal-redeemer/internal/config"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
+	"github.com/jmo/terminal-redeemer/internal/mirrortui"
 	"github.com/jmo/terminal-redeemer/internal/model"
 	"github.com/jmo/terminal-redeemer/internal/storelock"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
@@ -904,8 +905,12 @@ func TestMirrorOpenInteractivePickerIntegrationAndCancellation(t *testing.T) {
 	}
 
 	called := false
-	chooseMirrorSessions = func(windows []mirror.Window) ([]mirror.Window, bool, error) {
+	chooseMirrorSessions = func(host string, load mirrortui.SessionLoader) ([]mirror.Window, bool, error) {
 		called = true
+		windows, err := load(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(windows) != 2 || mirror.SessionName(windows[0]) != "alpha" || windows[0].WorkspaceName != "Dev" {
 			t.Fatalf("picker received unexpected discovery: %#v", windows)
 		}
@@ -917,7 +922,7 @@ func TestMirrorOpenInteractivePickerIntegrationAndCancellation(t *testing.T) {
 		t.Fatalf("code=%d called=%t out=%q stderr=%q", code, called, out.String(), stderr.String())
 	}
 
-	chooseMirrorSessions = func([]mirror.Window) ([]mirror.Window, bool, error) {
+	chooseMirrorSessions = func(string, mirrortui.SessionLoader) ([]mirror.Window, bool, error) {
 		return nil, true, nil
 	}
 	out.Reset()
@@ -928,10 +933,29 @@ func TestMirrorOpenInteractivePickerIntegrationAndCancellation(t *testing.T) {
 	}
 }
 
+func TestMirrorOpenPickerOwnsDiscoveryAndReportsItsFailure(t *testing.T) {
+	original := chooseMirrorSessions
+	defer func() { chooseMirrorSessions = original }()
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	var gotHost string
+	var loadErr error
+	chooseMirrorSessions = func(host string, load mirrortui.SessionLoader) ([]mirror.Window, bool, error) {
+		// The picker is entered before any discovery has happened.
+		gotHost = host
+		_, loadErr = load(context.Background())
+		return nil, false, loadErr
+	}
+	var out, stderr bytes.Buffer
+	code := run([]string{"mirror", "open", "--host", "source", "--snapshot-file", missing}, &out, &stderr)
+	if code != 1 || gotHost != "source" || loadErr == nil || !strings.Contains(stderr.String(), "mirror open failed: read mirror snapshot") {
+		t.Fatalf("code=%d host=%q loadErr=%v stderr=%q", code, gotHost, loadErr, stderr.String())
+	}
+}
+
 func TestMirrorOpenNoninteractiveFlagsBypassPickerAndPreserveOrdering(t *testing.T) {
 	original := chooseMirrorSessions
 	defer func() { chooseMirrorSessions = original }()
-	chooseMirrorSessions = func([]mirror.Window) ([]mirror.Window, bool, error) {
+	chooseMirrorSessions = func(string, mirrortui.SessionLoader) ([]mirror.Window, bool, error) {
 		t.Fatal("noninteractive selection invoked picker")
 		return nil, false, nil
 	}
