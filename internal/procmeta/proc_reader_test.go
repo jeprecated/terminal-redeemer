@@ -91,3 +91,25 @@ func writeProcEntry(t *testing.T, root string, pid int, ppid int, comm string, c
 		t.Fatalf("write cwd symlink: %v", err)
 	}
 }
+
+func TestSnapshotProcReaderScansProcessTableOnce(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProcEntry(t, root, 100, 1, "kitty", "/home/jmo")
+	writeProcEntry(t, root, 200, 100, "zsh", "/srv/first")
+	writeProcEntry(t, root, 300, 1, "kitty", "/home/jmo")
+
+	reader := NewSnapshotProcReader(root)
+	if info, err := reader.Inspect(100); err != nil || info.CWD != "/srv/first" {
+		t.Fatalf("first inspect: %#v %v", info, err)
+	}
+	// A child appearing after the capture's scan is not observed by it.
+	writeProcEntry(t, root, 400, 300, "zsh", "/srv/late")
+	if info, err := reader.Inspect(300); err != nil || info.CWD != "/home/jmo" {
+		t.Fatalf("snapshot reader rescanned: %#v %v", info, err)
+	}
+	if info, err := (ProcReader{ProcRoot: root}).Inspect(300); err != nil || info.CWD != "/srv/late" {
+		t.Fatalf("plain reader must rescan: %#v %v", info, err)
+	}
+}

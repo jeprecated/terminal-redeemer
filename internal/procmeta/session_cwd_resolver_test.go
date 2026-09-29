@@ -65,3 +65,27 @@ func writeProcResolverEntry(t *testing.T, root string, pid int, ppid int, comm s
 		t.Fatalf("write cwd symlink: %v", err)
 	}
 }
+
+func TestSnapshotSessionCWDResolverScansOnceAndMatchesPerCallResolver(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProcResolverEntry(t, root, 6219, 1, "zellij", "/home/jmo", "zellij --server /run/user/1000/zellij/contract_version_1/sensible-bee")
+	writeProcResolverEntry(t, root, 6244, 6219, "zsh", "/srv/bee", "zsh")
+	writeProcResolverEntry(t, root, 7219, 1, "zellij", "/home/jmo", "zellij --server /run/user/1000/zellij/contract_version_1/quiet-owl")
+	writeProcResolverEntry(t, root, 7244, 7219, "zsh", "/srv/owl", "zsh")
+
+	resolver := &SnapshotSessionCWDResolver{ProcRoot: root}
+	for session, want := range map[string]string{"sensible-bee": "/srv/bee", "quiet-owl": "/srv/owl", "missing": "", " ": ""} {
+		got, err := resolver.Resolve(session)
+		fresh, freshErr := NewZellijSessionCWDResolver(root).Resolve(session)
+		if err != nil || freshErr != nil || got != want || fresh != want {
+			t.Fatalf("%q: snapshot=%q/%v fresh=%q/%v want %q", session, got, err, fresh, freshErr, want)
+		}
+	}
+	writeProcResolverEntry(t, root, 8219, 1, "zellij", "/home/jmo", "zellij --server /run/user/1000/zellij/contract_version_1/late-bird")
+	writeProcResolverEntry(t, root, 8244, 8219, "zsh", "/srv/late", "zsh")
+	if got, _ := resolver.Resolve("late-bird"); got != "" {
+		t.Fatalf("snapshot resolver rescanned: %q", got)
+	}
+}

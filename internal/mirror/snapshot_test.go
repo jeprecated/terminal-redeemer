@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,5 +258,27 @@ func TestLegacySnapshotFixtureRemainsUnversionedAndSeparate(t *testing.T) {
 	}
 	if _, found := shape["observation"]; found {
 		t.Fatal("legacy payload acquired authoritative observation")
+	}
+}
+
+func TestListedSessionVerifierListsOnce(t *testing.T) {
+	calls := 0
+	verifier := &listedSessionVerifier{list: func() ([]string, error) {
+		calls++
+		return []string{"alpha", "beta"}, nil
+	}}
+	for session, want := range map[string]bool{"alpha": true, "beta": true, "gamma": false, " alpha ": true, "": false} {
+		if got, err := verifier.Exists(session); err != nil || got != want {
+			t.Fatalf("%q: got %t %v", session, got, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("listed %d times", calls)
+	}
+	failing := &listedSessionVerifier{list: func() ([]string, error) { return nil, errors.New("zellij unavailable") }}
+	for range 2 {
+		if ok, err := failing.Exists("alpha"); ok || err == nil {
+			t.Fatalf("list failure must be reported: %t %v", ok, err)
+		}
 	}
 }

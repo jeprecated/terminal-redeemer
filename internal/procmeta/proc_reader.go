@@ -11,6 +11,31 @@ import (
 
 type ProcReader struct {
 	ProcRoot string
+	children *childrenIndex
+}
+
+// childrenIndex holds one parent->children scan shared by copies of a reader.
+type childrenIndex struct {
+	loaded bool
+	index  map[int][]int
+}
+
+// NewSnapshotProcReader returns a reader that scans the process table once
+// and reuses it for every window of a single capture.
+func NewSnapshotProcReader(procRoot string) ProcReader {
+	return ProcReader{ProcRoot: procRoot, children: &childrenIndex{}}
+}
+
+func (r ProcReader) childrenOf(root string) map[int][]int {
+	if r.children == nil {
+		children, _ := buildChildrenIndex(root)
+		return children
+	}
+	if !r.children.loaded {
+		r.children.loaded = true
+		r.children.index, _ = buildChildrenIndex(root)
+	}
+	return r.children.index
 }
 
 const maxDescendantDepth = 3
@@ -61,7 +86,7 @@ func (r ProcReader) Inspect(pid int) (ProcessInfo, error) {
 }
 
 func (r ProcReader) detectPreferredCWD(root string, rootPID int, windowCWD string) (string, bool) {
-	descendants := collectDescendants(root, rootPID, maxDescendantDepth)
+	descendants := collectDescendants(root, r.childrenOf(root), rootPID, maxDescendantDepth)
 	if len(descendants) == 0 {
 		return "", false
 	}
@@ -104,8 +129,7 @@ type descendantCandidate struct {
 	comm  string
 }
 
-func collectDescendants(root string, rootPID int, maxDepth int) []descendantCandidate {
-	children, _ := buildChildrenIndex(root)
+func collectDescendants(root string, children map[int][]int, rootPID int, maxDepth int) []descendantCandidate {
 	out := make([]descendantCandidate, 0, 16)
 	queue := []descendantCandidate{{pid: rootPID, depth: 0}}
 

@@ -146,15 +146,18 @@ func Capture(ctx context.Context, opts Options) (Snapshot, error) {
 
 	reader := opts.Reader
 	if reader == nil {
-		reader = procmeta.ProcReader{}
+		reader = procmeta.NewSnapshotProcReader("")
 	}
 	verifier := opts.Verifier
 	if verifier == nil {
-		verifier = procmeta.NewZellijSessionVerifier(nil)
+		// One capture is one observation: list sessions once, not per window
+		// (previously one `zellij list-sessions` process per window).
+		verifier = &listedSessionVerifier{list: procmeta.NewZellijSessionVerifier(nil).List}
 	}
 	resolver := opts.Resolver
 	if resolver == nil {
-		resolver = procmeta.NewZellijSessionCWDResolver("")
+		// One /proc scan per capture instead of one per headless session.
+		resolver = &procmeta.SnapshotSessionCWDResolver{}
 	}
 	evidence := opts.SessionEvidence
 	if evidence == nil {
@@ -421,6 +424,34 @@ func copyIntSlice(in []int) []int {
 		return nil
 	}
 	return append([]int(nil), in...)
+}
+
+// listedSessionVerifier answers Exists from a single lazy session listing.
+type listedSessionVerifier struct {
+	list     func() ([]string, error)
+	loaded   bool
+	sessions map[string]bool
+	err      error
+}
+
+func (v *listedSessionVerifier) Exists(session string) (bool, error) {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return false, nil
+	}
+	if !v.loaded {
+		v.loaded = true
+		names, err := v.list()
+		v.err = err
+		v.sessions = make(map[string]bool, len(names))
+		for _, name := range names {
+			v.sessions[name] = true
+		}
+	}
+	if v.err != nil {
+		return false, v.err
+	}
+	return v.sessions[session], nil
 }
 
 type ShellRunner struct{}
