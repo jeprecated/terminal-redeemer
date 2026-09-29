@@ -159,6 +159,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 	failure := ""
 	last := SessionControlReply{Reason: "Waiting for shared recovery"}
 	notice := ""
+	shown := "" // Last status screen; redraw only on change, not every tick.
 	defer func() {
 		gate.close()
 		if child != nil {
@@ -207,13 +208,21 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			if child == nil && failure != "" {
 				detail = failure + "; " + detail
 			}
-			if !last.RetryAt.IsZero() {
-				detail += fmt.Sprintf("; retrying in %ds", max(0, int(time.Until(last.RetryAt).Seconds())+1))
+			// A due or past retry is happening now; never count down "1s" for it.
+			if wait := time.Until(last.RetryAt); !last.RetryAt.IsZero() && wait > 0 {
+				detail += fmt.Sprintf("; retrying in %ds", int((wait+time.Second-1)/time.Second))
 			}
 		}
+		screen := fmt.Sprintf("%s / %s\r\n\r\n%s\r\n\r\nEnter to retry now\r\n", cfg.Remote.Host, cfg.Session, detail)
+		if screen == shown {
+			return
+		}
 		// Bracketed paste lets the input gate retain the origin of a paste spanning
-		// readiness, instead of forwarding its tail as fresh typing.
-		_ = writeSessionTerminal(ctx, outFD, []byte(fmt.Sprintf("\x1b[0m\x1b[?2004h\x1b[2J\x1b[H%s / %s\r\n\r\n%s\r\n\r\nEnter to retry now\r\n", cfg.Remote.Host, cfg.Session, detail)))
+		// readiness, instead of forwarding its tail as fresh typing. A lost
+		// attachment leaves Zellij's mouse/focus reporting and hidden cursor on.
+		if err := writeSessionTerminal(ctx, outFD, []byte(sessionStatusModes+"\x1b[2J\x1b[H"+screen)); err == nil {
+			shown = screen
+		}
 	}
 	send := func() {
 		if busy {
@@ -264,8 +273,11 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 		} else if opened {
 			// Keep the reconnect screen intact until both proof and an input
 			// boundary exist. Startup output is bounded and never treated as proof.
-			data := append([]byte("\x1b[0m\x1b[2J\x1b[H"), startupOutput...)
+			// Queries emitted before the Zellij client started have no reader;
+			// their replies must not become keystrokes for this attachment.
+			data := append([]byte("\x1b[0m\x1b[2J\x1b[H"), stripPreClientQueries(startupOutput)...)
 			startupOutput = nil
+			shown = ""
 			if err := writeSessionTerminal(ctx, outFD, data); err != nil {
 				lose()
 				return
@@ -278,6 +290,16 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	// While the coordinator is checking the host, or a scheduled retry is due,
+	// its answer can change at any moment; poll faster than the steady tick.
+	// Plain admission waits (slots busy, no retry time) keep the tick rate.
+	var admission <-chan time.Time
+	awaitAdmission := func() {
+		admission = nil
+		if child == nil && gate.current() == 0 && !last.Ended && (last.Checking || !last.RetryAt.IsZero() && !time.Now().Before(last.RetryAt)) {
+			admission = time.After(sessionAdmissionPoll)
+		}
+	}
 	render()
 	send()
 	for {
@@ -317,6 +339,8 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			}
 			open()
 		case <-resize:
+			shown = ""
+			render()
 			if child != nil {
 				if size, err := unix.IoctlGetWinsize(inFD, unix.TIOCGWINSZ); err == nil {
 					_ = unix.IoctlSetWinsize(child.fd, unix.TIOCSWINSZ, size)
@@ -434,6 +458,10 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 			if len(reports) > 0 || retry {
 				send()
 			}
+			awaitAdmission()
+		case <-admission:
+			admission = nil
+			send()
 		case <-ticker.C:
 			if child != nil && gate.current() == 0 && !time.Now().Before(grant.Deadline) {
 				lose()
@@ -444,5 +472,12 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 		}
 	}
 }
+
+// Status screens reset attributes and whatever reporting modes a lost Zellij
+// client left enabled (mouse, focus, hidden cursor, one pushed kitty keyboard
+// level; popping an empty stack is a no-op). Bracketed paste stays on.
+const sessionStatusModes = "\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[<u\x1b[?25h\x1b[?2004h"
+
+const sessionAdmissionPoll = 100 * time.Millisecond
 
 func bytesContainEnter(data []byte) bool { return strings.ContainsAny(string(data), "\r\n") }

@@ -63,9 +63,15 @@ func TestSessionTransportProcess(t *testing.T) {
 				_ = os.Remove(path + ".stale")
 			}
 			if _, err := os.Stat(path + ".ready"); err == nil {
+				if b, err := os.ReadFile(path + ".prelude"); err == nil {
+					fmt.Print(string(b)) // pre-ready output, e.g. a stale terminal query
+				}
 				fmt.Print(AttachmentMarker(attempt, "ready"))
 				ready = true
 			}
+		} else if b, err := os.ReadFile(path + ".live"); err == nil {
+			fmt.Print(string(b))
+			_ = os.Remove(path + ".live")
 		}
 		select {
 		case <-resize:
@@ -107,6 +113,8 @@ type testSessionControl struct {
 	active      SessionGrant
 	slots       int
 	denySlot    bool
+	calls       int
+	idle        bool // host available, no retry time: plain admission wait
 }
 
 func (c *testSessionControl) acquirePendingSlot() (func(), error) {
@@ -131,6 +139,7 @@ func (c *testSessionControl) acquirePendingSlot() (func(), error) {
 
 func (c *testSessionControl) Exchange(ctx context.Context, r SessionControlRequest) (SessionControlReply, error) {
 	c.mu.Lock()
+	c.calls++
 	blocked, late := c.block, c.late
 	if r.Event == "ready" {
 		c.ready = append(c.ready, r.Attempt)
@@ -139,6 +148,9 @@ func (c *testSessionControl) Exchange(ctx context.Context, r SessionControlReque
 		c.lost = append(c.lost, r.Attempt)
 	}
 	reply := SessionControlReply{Checking: true, Reason: "Host unavailable", Ended: c.ended, Reset: c.reset}
+	if c.idle {
+		reply.Checking, reply.Reason = false, "Waiting for attachment admission"
+	}
 	if c.stale != "" {
 		reply.Grant = &SessionGrant{c.stale, time.Now().Add(time.Second)}
 	} else if r.Event == "" {
@@ -541,4 +553,81 @@ func TestSessionSupervisorForwardsLoneEscapeWhenReady(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	h.write(t, "j")
 	awaitSession(t, func() bool { return h.received(attempt) == "\x1bj" })
+}
+
+func TestSessionSupervisorStatusScreenRedrawsOnlyOnChange(t *testing.T) {
+	h := sessionTerminalFixture(t)
+	h.control.change(func() { h.control.block = true })
+	h.write(t, "\r")
+	h.waitText(t, "Retry requested")
+	h.mu.Lock()
+	before := strings.Count(h.text.String(), "Enter to retry now")
+	h.mu.Unlock()
+	time.Sleep(700 * time.Millisecond) // several 250ms ticks, unchanged status
+	h.mu.Lock()
+	text := h.text.String()
+	h.mu.Unlock()
+	if after := strings.Count(text, "Enter to retry now"); after != before {
+		t.Fatalf("unchanged status redrawn %d times", after-before)
+	}
+	if !strings.Contains(text, "\x1b[?1003l\x1b[?1006l") || !strings.Contains(text, "\x1b[<u") || !strings.Contains(text, "\x1b[?25h") {
+		t.Fatalf("status screen does not reset leftover reporting modes: %q", text)
+	}
+}
+
+func TestSessionSupervisorPollsAdmissionFasterThanTick(t *testing.T) {
+	h := sessionTerminalFixture(t)
+	h.control.change(func() { h.control.calls = 0 })
+	time.Sleep(400 * time.Millisecond)
+	var calls int
+	h.control.change(func() { calls = h.control.calls })
+	if calls < 3 {
+		t.Fatalf("checking host polled %d times in 400ms", calls)
+	}
+	h.control.change(func() { h.control.permits = 1 })
+	first := h.control.attempt(t, 1)
+	h.ready(t, first)
+	h.control.change(func() { h.control.calls = 0 })
+	time.Sleep(400 * time.Millisecond)
+	h.control.change(func() { calls = h.control.calls })
+	if calls > 3 {
+		t.Fatalf("ready attachment kept fast polling: %d calls in 400ms", calls)
+	}
+}
+
+func TestSessionSupervisorPlainAdmissionWaitKeepsTickRate(t *testing.T) {
+	h := sessionTerminalFixture(t)
+	h.control.change(func() { h.control.idle = true })
+	time.Sleep(300 * time.Millisecond) // let an idle reply become current
+	var calls int
+	h.control.change(func() { h.control.calls = 0 })
+	time.Sleep(400 * time.Millisecond)
+	h.control.change(func() { calls = h.control.calls })
+	if calls > 3 {
+		t.Fatalf("plain admission wait polled %d times in 400ms", calls)
+	}
+}
+
+func TestSessionSupervisorStripsPreReadyQueriesOnly(t *testing.T) {
+	h := sessionTerminalFixture(t)
+	h.control.change(func() { h.control.permits = 1 })
+	attempt := h.control.attempt(t, 1)
+	if err := os.WriteFile(filepath.Join(h.root, attempt+".prelude"), []byte("\x1b]11;?\x1b\\\x1b[6nprelude-frame"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.ready(t, attempt)
+	h.waitText(t, "prelude-frame")
+	if err := os.WriteFile(filepath.Join(h.root, attempt+".live"), []byte("\x1b[6nlive-frame"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.waitText(t, "live-frame")
+	h.mu.Lock()
+	text := h.text.String()
+	h.mu.Unlock()
+	if strings.Contains(text, "\x1b]11;?") || strings.Contains(text, "\x1b[6nprelude-frame") {
+		t.Fatalf("pre-ready query reached the physical terminal: %q", text)
+	}
+	if !strings.Contains(text, "\x1b[6nlive-frame") {
+		t.Fatalf("live post-ready output was filtered: %q", text)
+	}
 }

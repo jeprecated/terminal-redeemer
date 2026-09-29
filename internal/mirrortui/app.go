@@ -6,7 +6,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jmo/terminal-redeemer/internal/mirror"
+	"github.com/jmo/terminal-redeemer/internal/termquery"
 )
+
+// Runs after bubbletea's import-time terminal query has been skipped.
+func init() { termquery.Restore() }
 
 // Run opens the interactive picker. Cancellation is a successful outcome with
 // cancelled set, allowing callers to launch nothing and exit cleanly.
