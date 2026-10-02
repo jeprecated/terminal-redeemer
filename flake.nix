@@ -25,6 +25,10 @@
 
           preCheck = pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
             export TMPDIR="$(cd "$TMPDIR" && pwd -P)"
+            export REDEEM_TEST_KITTY=${pkgs.lib.getExe pkgs.kitty}
+          '';
+          postCheck = pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+            go test ./internal/mirror -run '^TestKittyLaunch' -count=1
           '';
 
           meta = with pkgs.lib; {

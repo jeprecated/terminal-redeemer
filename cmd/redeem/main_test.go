@@ -864,10 +864,13 @@ func TestMirrorNewDryRunShowsCreatorAndBestEffortSourceHelper(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{"kitty", "owned-mirror", "user@lattice", "session-create", "redeem-0123456789abcdef0123456789abcdef", "session-supervisor", "--session-id", "attach-local", "--workspace", "agentleman", "waits for exact ACTIVE session"} {
+	for _, want := range []string{"kitty", "user@lattice", "session-create", "redeem-0123456789abcdef0123456789abcdef", "session-supervisor", "--session-id", "attach-local", "--workspace", "agentleman", "waits for exact ACTIVE session"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("dry-run missing %q: %s", want, out.String())
 		}
+	}
+	if got, want := strings.Contains(out.String(), "'--class' 'owned-mirror'"), runtime.GOOS != "darwin"; got != want {
+		t.Fatalf("platform-specific Kitty class: got=%v want=%v: %s", got, want, out.String())
 	}
 	for _, forbidden := range []string{"${SHELL", "exec sh", "exec bash"} {
 		if strings.Contains(out.String(), forbidden) {

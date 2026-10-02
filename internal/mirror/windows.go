@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -96,7 +97,11 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string) (LaunchPl
 	// process evidence, never this title, remains projection authority.
 	title := fmt.Sprintf("%s[%d|%s]: %s", cfg.SourceHost, window.Order, session, titlePart)
 
-	args := []string{"--detach", "--class", cfg.AppID, "--override", "confirm_os_window_close=0", "--title", title}
+	args := []string{"--detach"}
+	if runtime.GOOS != "darwin" {
+		args = append(args, "--class", cfg.AppID)
+	}
+	args = append(args, "--override", "confirm_os_window_close=0", "--title", title)
 	if cfg.Clipboard {
 		if strings.TrimSpace(cfg.Socket) == "" || strings.TrimSpace(cfg.SelfCommand) == "" {
 			return LaunchPlan{}, fmt.Errorf("clipboard bridge requires a socket and self command")
