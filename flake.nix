@@ -109,6 +109,7 @@
                     enable = true;
                     package = self.packages.${system}.terminal-redeemer;
                     mirror.sourceHost = "source-example";
+                    mirror.launcherAdapter = [ "example-terminal-adapter" ];
                   };
                 }
               ];
@@ -119,6 +120,7 @@
           assert !cfg.capture.enable && !cfg.resume.onStartup && !cfg.retention.prune.enable;
           assert !cfg.mirror.clipboard.enabled;
           assert cfg.renderedConfig.mirror.sourceHost == "source-example";
+          assert cfg.renderedConfig.mirror.launcherAdapter == [ "example-terminal-adapter" ];
           assert !(home.config.systemd.user.services ? terminal-redeemer-capture);
           assert cfg.mirror.openCommand == [ (pkgs.lib.getExe cfg.package) "mirror" "open" "--host" "source-example" ];
           pkgs.runCommand "terminal-redeemer-hm-client-eval" { } ''touch "$out"'';

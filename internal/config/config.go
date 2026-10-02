@@ -54,6 +54,7 @@ type MirrorConfig struct {
 	SSHOptions      []string              `yaml:"sshOptions"`
 	SnapshotCommand []string              `yaml:"snapshotCommand"`
 	LauncherCommand string                `yaml:"launcherCommand"`
+	LauncherAdapter []string              `yaml:"launcherAdapter,omitempty"`
 	SelfCommand     string                `yaml:"selfCommand"`
 	AppID           string                `yaml:"appID"`
 	OpenDelay       time.Duration         `yaml:"openDelay"`
@@ -210,8 +211,21 @@ func Validate(cfg Config) error {
 	if len(cfg.Mirror.SnapshotCommand) == 0 || strings.TrimSpace(cfg.Mirror.SnapshotCommand[0]) == "" {
 		return fmt.Errorf("mirror.snapshotCommand must not be empty")
 	}
-	if strings.TrimSpace(cfg.Mirror.LauncherCommand) == "" || strings.TrimSpace(cfg.Mirror.AppID) == "" {
+	if len(cfg.Mirror.LauncherAdapter) == 0 && (strings.TrimSpace(cfg.Mirror.LauncherCommand) == "" || strings.TrimSpace(cfg.Mirror.AppID) == "") {
 		return fmt.Errorf("mirror.launcherCommand and mirror.appID must not be empty")
+	}
+	if len(cfg.Mirror.LauncherAdapter) > 0 {
+		if strings.TrimSpace(cfg.Mirror.LauncherAdapter[0]) == "" {
+			return fmt.Errorf("mirror.launcherAdapter requires an executable")
+		}
+		for _, argument := range cfg.Mirror.LauncherAdapter {
+			if strings.ContainsRune(argument, 0) {
+				return fmt.Errorf("mirror.launcherAdapter must not contain NUL")
+			}
+		}
+		if cfg.Mirror.Clipboard.Enabled {
+			return fmt.Errorf("mirror.launcherAdapter requires mirror.clipboard.enabled=false")
+		}
 	}
 	if strings.TrimSpace(cfg.Mirror.NiriCommand) == "" {
 		return fmt.Errorf("mirror.niriCommand must not be empty")

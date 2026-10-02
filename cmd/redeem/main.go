@@ -155,6 +155,13 @@ func runMirror(args []string, resolvedConfig config.Config, stdout io.Writer, st
 		printMirrorHelp(stdout)
 		return 0
 	}
+	if len(resolvedConfig.Mirror.LauncherAdapter) > 0 {
+		switch args[0] {
+		case "save", "apply", "follow":
+			fmt.Fprintln(stderr, "custom launcher adapters support mirror open/new, not Niri-owned save/apply/follow")
+			return 2
+		}
+	}
 	switch args[0] {
 	case "snapshot":
 		return runMirrorSnapshot(args[1:], resolvedConfig, stdout, stderr)
@@ -332,6 +339,16 @@ var chooseMirrorSessions = mirrortui.RunLoading
 var chooseFollowWorkspace = mirrortui.RunWorkspaceLoading
 var newMirrorSessionName = mirror.NewSessionName
 
+func configuredLauncherAdapter(flags *flag.FlagSet, cfg config.MirrorConfig) []string {
+	adapter := cfg.LauncherAdapter
+	flags.Visit(func(option *flag.Flag) {
+		if option.Name == "launcher-command" {
+			adapter = nil
+		}
+	})
+	return adapter
+}
+
 func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("mirror new", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -376,7 +393,8 @@ func runMirrorNew(args []string, resolvedConfig config.Config, stdout io.Writer,
 	launchCfg := mirror.LaunchConfig{
 		SourceHost: remote.Host, SSHCommand: remote.SSHCommand, SSHOptions: remote.SSHOptions, SnapshotCommand: remote.SnapshotCommand,
 		LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID, CorrelationToken: unique,
-		Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
+		LauncherAdapter: configuredLauncherAdapter(fs, resolvedConfig.Mirror),
+		Socket:          socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
 		// Preflight only: this ID is never executed or used as creation evidence.
 		SessionID: "ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	}
@@ -578,7 +596,8 @@ func runMirrorOpen(args []string, resolvedConfig config.Config, stdout io.Writer
 			SessionID: id, SnapshotCommand: source.snapshotCommand.values, CorrelationToken: unique,
 			SourceHost: host, SSHCommand: *source.sshCommand, SSHOptions: source.sshOptions.values,
 			LauncherCommand: *launcher, SelfCommand: *selfCommand, AppID: *appID,
-			Socket: socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
+			LauncherAdapter: configuredLauncherAdapter(fs, resolvedConfig.Mirror),
+			Socket:          socket, Clipboard: resolvedConfig.Mirror.Clipboard.Enabled && !*noClipboard,
 		})
 		if planErr != nil {
 			_, _ = fmt.Fprintf(stderr, "mirror open failed: %v\n", planErr)

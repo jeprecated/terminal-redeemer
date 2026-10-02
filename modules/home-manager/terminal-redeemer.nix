@@ -45,6 +45,8 @@ let
         tempDir = cfg.mirror.clipboard.tempDir;
         mimeTypes = cfg.mirror.clipboard.mimeTypes;
       };
+    } // lib.optionalAttrs (cfg.mirror.launcherAdapter != [ ]) {
+      launcherAdapter = cfg.mirror.launcherAdapter;
     };
   };
   settingsFile = settingsFormat.generate "terminal-redeemer-config.yaml" renderedConfig;
@@ -205,6 +207,7 @@ in {
       sshOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SSH argv options."; };
       snapshotCommand = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ "redeem" "mirror" "snapshot" ]; description = "Remote snapshot command argv."; };
       launcherCommand = lib.mkOption { type = lib.types.str; default = "kitty"; description = "Kitty-compatible local launcher executable."; };
+      launcherAdapter = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "External launcher argv for mirror open/new, using the version 1 adapter protocol; empty keeps the built-in Kitty launcher."; };
       selfCommand = lib.mkOption { type = lib.types.str; default = "redeem"; description = "Redeem executable used in Kitty clipboard mappings."; };
       appID = lib.mkOption { type = lib.types.str; default = "terminal-redeemer-mirror"; description = "App ID/class marking Terminal Redeemer-owned mirror windows."; };
       openDelay = lib.mkOption { type = lib.types.str; default = "150ms"; description = "Delay between local window launches."; };
@@ -232,6 +235,9 @@ in {
     assertions = [{
       assertion = cfg.mirror.sourceWorkspace == "" || cfg.mirror.sourceHost != "";
       message = "programs.terminal-redeemer.mirror.sourceWorkspace requires mirror.sourceHost";
+    } {
+      assertion = cfg.mirror.launcherAdapter == [ ] || !cfg.mirror.clipboard.enabled;
+      message = "mirror.launcherAdapter requires mirror.clipboard.enabled=false.";
     } {
       assertion = pkgs.stdenv.isLinux || !(cfg.capture.enable || cfg.resume.onStartup || cfg.retention.prune.enable || cfg.mirror.clipboard.enabled);
       message = "Terminal Redeemer's macOS client does not support Niri capture/recovery, pruning or the Wayland image clipboard bridge.";

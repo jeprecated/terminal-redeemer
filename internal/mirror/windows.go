@@ -27,6 +27,7 @@ type LaunchConfig struct {
 	SSHCommand       string
 	SSHOptions       []string
 	LauncherCommand  string
+	LauncherAdapter  []string
 	SelfCommand      string
 	AppID            string
 	Socket           string
@@ -67,7 +68,7 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string) (LaunchPl
 	if err := ValidateSession(session); err != nil {
 		return LaunchPlan{}, err
 	}
-	if strings.TrimSpace(cfg.LauncherCommand) == "" || strings.TrimSpace(cfg.SSHCommand) == "" || strings.TrimSpace(cfg.AppID) == "" {
+	if strings.TrimSpace(cfg.SSHCommand) == "" || (len(cfg.LauncherAdapter) == 0 && (strings.TrimSpace(cfg.LauncherCommand) == "" || strings.TrimSpace(cfg.AppID) == "")) {
 		return LaunchPlan{}, fmt.Errorf("launcher, SSH command, and app ID must not be empty")
 	}
 
@@ -96,6 +97,17 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string) (LaunchPl
 	// The exact session is immutable launch-time presentation metadata. Live
 	// process evidence, never this title, remains projection authority.
 	title := fmt.Sprintf("%s[%d|%s]: %s", cfg.SourceHost, window.Order, session, titlePart)
+	plan := LaunchPlan{SourceHost: cfg.SourceHost, Session: session, Title: title, Order: window.Order, RemoteCWD: cwd}
+	if len(cfg.LauncherAdapter) > 0 {
+		if strings.TrimSpace(cfg.LauncherAdapter[0]) == "" || cfg.Clipboard {
+			return LaunchPlan{}, fmt.Errorf("launcher adapter requires an executable and disabled Kitty clipboard bridge")
+		}
+		args := append([]string(nil), cfg.LauncherAdapter[1:]...)
+		args = append(args, "--protocol-version=1", "--title="+title, "--source-host="+cfg.SourceHost, "--session="+session, "--session-id="+cfg.SessionID, "--")
+		args = append(args, supervisor...)
+		plan.Command = Command{Name: cfg.LauncherAdapter[0], Args: args}
+		return plan, nil
+	}
 
 	args := []string{"--detach"}
 	if runtime.GOOS != "darwin" {
@@ -112,14 +124,8 @@ func planZellijLaunch(window Window, cfg LaunchConfig, session string) (LaunchPl
 	}
 	args = append(args, "-e")
 	args = append(args, supervisor...)
-	return LaunchPlan{
-		SourceHost: cfg.SourceHost,
-		Session:    session,
-		Title:      title,
-		Order:      window.Order,
-		RemoteCWD:  cwd,
-		Command:    Command{Name: cfg.LauncherCommand, Args: args},
-	}, nil
+	plan.Command = Command{Name: cfg.LauncherCommand, Args: args}
+	return plan, nil
 }
 
 func RenderCommand(command Command) string {

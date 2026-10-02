@@ -1,5 +1,44 @@
 # Configuration
 
+## External terminal launcher
+
+`mirror.launcherAdapter` is an optional executable-and-arguments list for
+`mirror open` and `mirror new`. An empty list (the default) preserves the
+built-in Kitty launcher. No terminal-specific integration is required in Redeemer:
+
+```yaml
+mirror:
+  launcherAdapter: ["/absolute/path/to/my-terminal-adapter"]
+  clipboard:
+    enabled: false
+```
+
+The adapter receives its configured arguments, then these literal argv entries:
+
+```text
+--protocol-version=1 --title=TITLE --source-host=HOST --session=SESSION --session-id=EXACT_ID -- CHILD_EXECUTABLE CHILD_ARGUMENTS...
+```
+
+Each metadata option is one argument, including spaces or punctuation in its
+value. Arguments after `--` are the exact persistent session supervisor command;
+execute them unchanged in the new terminal's PTY. Do not turn them into an
+unquoted shell string, create a session, substitute a name-only attachment,
+or retry creation. If the terminal API accepts only command text, the adapter
+must quote each argument according to that API's parser. Metadata is presentation,
+not shell code or session authority. The adapter inherits the caller's environment,
+must return promptly after launching, and must report failures with nonzero exit.
+Redeemer does not retry a failed adapter launch automatically.
+
+The external adapter receives no Kitty flags. The Kitty image clipboard bridge
+must be disabled. Niri-owned `save`, `apply`, and `follow` reject an external
+adapter rather than silently using a different terminal. Source-side creation
+and best-effort source Kitty placement remain unchanged. `--dry-run` prints the
+adapter invocation without executing it; explicit `--launcher-command kitty`
+on `open`/`new` bypasses the configured adapter for that invocation.
+
+Home Manager exposes the same `programs.terminal-redeemer.mirror.launcherAdapter`
+list. App-specific adapter scripts and defaults belong to consumers, not Redeemer.
+
 Configuration precedence is:
 
 1. built-in defaults;
