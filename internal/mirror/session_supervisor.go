@@ -135,7 +135,7 @@ func RunSessionSupervisor(ctx context.Context, cfg SessionSupervisorConfig) erro
 		<-inputDone
 		// No later attachment exists on exit; discard remaining physical input
 		// before restoring the caller's terminal discipline.
-		_ = unix.IoctlSetInt(inFD, unix.TCFLSH, unix.TCIFLUSH)
+		flushTerminalInput(inFD)
 	}()
 	resize := make(chan os.Signal, 1)
 	signal.Notify(resize, syscall.SIGWINCH)

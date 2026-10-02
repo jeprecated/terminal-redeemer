@@ -97,14 +97,7 @@ func startSessionTransport(ctx context.Context, command Command, attempt string,
 		defer output.Close()
 		// Observe exit WITHOUT reaping first. The leader's PID stays reserved until
 		// its group is killed, preventing cleanup from signalling a recycled PGID.
-		var info unix.Siginfo
-		var waitErr error
-		for {
-			waitErr = unix.Waitid(unix.P_PID, cmd.Process.Pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
-			if waitErr != unix.EINTR {
-				break
-			}
-		}
+		waitErr := waitTransportExit(cmd.Process.Pid)
 		mu.Lock()
 		if waitErr == nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

@@ -114,7 +114,7 @@ func TestLoadRejectsInvalidResumeConfig(t *testing.T) {
 
 func TestLoadRejectsIncompleteClipboardCommands(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("mirror:\n  selfCommand: ''\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("mirror:\n  selfCommand: ''\n  clipboard:\n    enabled: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path, true); err == nil {

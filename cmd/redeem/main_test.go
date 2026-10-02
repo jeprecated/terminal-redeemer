@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,12 +43,16 @@ func TestHelpByDefault(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d", code)
 	}
-	for _, want := range []string{
+	expected := []string{
 		"Refresh this boot's rolling terminal checkpoint",
 		"Restore prior-boot placement or reconcile all recovery sessions",
 		"Create, pick, pin, apply, or temporarily follow remote terminals",
 		"Read-only capture/resume/mirror diagnostics",
-	} {
+	}
+	if runtime.GOOS == "darwin" {
+		expected = []string{"macOS client", "mirror <list|open|new>"}
+	}
+	for _, want := range expected {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help output missing %q: %q", want, out.String())
 		}
@@ -67,7 +72,11 @@ func TestHelpDoesNotRequireValidRuntimeConfig(t *testing.T) {
 	if code := run([]string{"--config", path, "--help"}, &out, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(out.String(), "Create, pick, pin, apply, or temporarily follow remote terminals") {
+	expected := "Create, pick, pin, apply, or temporarily follow remote terminals"
+	if runtime.GOOS == "darwin" {
+		expected = "macOS client"
+	}
+	if !strings.Contains(out.String(), expected) {
 		t.Fatalf("unexpected help: %q", out.String())
 	}
 }
@@ -79,13 +88,17 @@ func TestMirrorHelpDistinguishesBoundedWorkflows(t *testing.T) {
 	if code := run([]string{"mirror", "--help"}, &out, &stderr); code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for _, want := range []string{
+	expected := []string{
 		"Create one persistent session and best-effort open its source view",
 		"Manually pick and attach visible or headless live sessions",
 		"Replace one pinned projection set from fresh exact evidence",
 		"Attach the available sessions from that pin without creating them",
 		"Temporarily follow one selected source workspace in the foreground",
-	} {
+	}
+	if runtime.GOOS == "darwin" {
+		expected = []string{"List live source sessions", "Pick existing sessions", "Create one session on the source"}
+	}
+	for _, want := range expected {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("mirror help missing %q: %q", want, out.String())
 		}
@@ -108,6 +121,9 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestSubcommandHelpExitCodes(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	t.Parallel()
 
 	tests := []struct {
@@ -150,6 +166,9 @@ func TestSubcommandHelpExitCodes(t *testing.T) {
 }
 
 func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	t.Parallel()
 
 	tests := []struct {
@@ -186,6 +205,9 @@ func TestInvalidUsageExitCodesRemainTwo(t *testing.T) {
 }
 
 func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	root := t.TempDir()
 	now := time.Now().UTC().Add(-time.Minute)
 	state := model.State{
@@ -252,6 +274,9 @@ func TestResumeDryRunSelectsPriorBootAndOnlyListsSessions(t *testing.T) {
 }
 
 func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	root := t.TempDir()
 	now := time.Now().UTC().Add(-time.Minute)
 	boot, err := bootid.Current()
@@ -331,6 +356,9 @@ func TestResumeAllDryRunUsesExactCatalogStickyInventoryAndDetailedReasons(t *tes
 }
 
 func TestResumeAllExecutionReobservesStalePriorActiveBeforeLaunch(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	root := t.TempDir()
 	observed := time.Now().UTC().Add(-72 * time.Hour)
 	state := model.State{}
@@ -394,6 +422,9 @@ func TestResumeAllExecutionReobservesStalePriorActiveBeforeLaunch(t *testing.T) 
 }
 
 func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	stateDir := t.TempDir()
 	missingFixture := filepath.Join(t.TempDir(), "not-ready.json")
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
@@ -415,6 +446,9 @@ func TestResumeWaitsForNiriBeforeCheckpointSelection(t *testing.T) {
 }
 
 func TestMutatingResumeHonorsRepositoryOperationLock(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	stateDir := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(configPath, []byte("stateDir: "+stateDir+"\n"), 0o600); err != nil {
@@ -446,6 +480,9 @@ func configureFakeZellij(t *testing.T) {
 }
 
 func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	configureFakeZellij(t)
 
 	root := t.TempDir()
@@ -477,6 +514,9 @@ func TestCaptureOnceEndToEndWithFixture(t *testing.T) {
 }
 
 func TestCaptureOnceEndToEndWithCommandSnapshotter(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	configureFakeZellij(t)
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
@@ -500,6 +540,9 @@ func TestCaptureOnceEndToEndWithCommandSnapshotter(t *testing.T) {
 }
 
 func TestMirrorSnapshotEndToEndWithFixture(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	t.Parallel()
 
 	root := t.TempDir()
@@ -537,6 +580,9 @@ func TestMirrorSnapshotEndToEndWithFixture(t *testing.T) {
 }
 
 func TestPruneRunCommand(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux checkpoint pruning CLI")
+	}
 	t.Parallel()
 	root := t.TempDir()
 	store, err := checkpoints.NewStore(root)
@@ -572,6 +618,9 @@ func TestPruneRunCommand(t *testing.T) {
 }
 
 func TestGlobalConfigAppliesCaptureDefaultsAndCLIOverrides(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	configureFakeZellij(t)
 	root := t.TempDir()
 	fixturePath := filepath.Join(root, "niri.json")
@@ -623,6 +672,9 @@ func TestGlobalConfigAppliesCaptureDefaultsAndCLIOverrides(t *testing.T) {
 }
 
 func TestGlobalConfigExplicitMissingFileErrors(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	pathDir := t.TempDir()
 	for _, cmd := range []string{"kitty", "zellij", "niri"} {
 		cmdPath := filepath.Join(pathDir, cmd)
@@ -651,6 +703,9 @@ func TestGlobalConfigExplicitMissingFileErrors(t *testing.T) {
 }
 
 func TestDoctorPassExitCode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	configPath := filepath.Join(root, "config.yaml")
@@ -706,6 +761,9 @@ func TestDoctorPassExitCode(t *testing.T) {
 }
 
 func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	dir := t.TempDir()
 	ssh := filepath.Join(dir, "ssh")
 	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"windows\":[]}'\n"), 0o700); err != nil {
@@ -730,6 +788,9 @@ func TestMirrorSaveDryRunDoesNotCreateState(t *testing.T) {
 }
 
 func TestMirrorApplyDryRunPlansWithoutMutation(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	dir := t.TempDir()
 	ssh := filepath.Join(dir, "ssh")
 	if err := os.WriteFile(ssh, []byte("#!/bin/sh\nprintf '%s\\n' '{\"host\":\"remote-self-label\",\"profile\":\"default\",\"generated_at\":\"2026-01-01T00:00:00Z\",\"active_zellij_sessions\":[\"A\"],\"active_zellij_session_ids\":{\"A\":\"ses_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"},\"windows\":[{\"order\":0,\"app_id\":\"zellij\",\"title\":\"A\",\"headless\":true,\"zellij_session\":\"A\"}]}'\n"), 0o700); err != nil {
@@ -881,6 +942,9 @@ func TestExecuteMirrorNewRunsCreatorThenOneBoundedBestEffortHelper(t *testing.T)
 }
 
 func TestMirrorAttachLocalDryRunIsAttachOnlyAndValidatesWorkspace(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	const session = "redeem-0123456789abcdef0123456789abcdef"
 	var out, stderr bytes.Buffer
 	code := run([]string{"mirror", "attach-local", "--session", session, "--workspace", "agentleman", "--dry-run"}, &out, &stderr)
@@ -1015,6 +1079,9 @@ func TestMirrorMalformedSnapshotError(t *testing.T) {
 }
 
 func TestMirrorCloseDryRunUsesOwnedWindowFilter(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux source/window-management CLI")
+	}
 	root := t.TempDir()
 	niri := filepath.Join(root, "fake-niri")
 	script := `#!/bin/sh

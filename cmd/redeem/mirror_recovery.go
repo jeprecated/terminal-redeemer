@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	goruntime "runtime"
 	"syscall"
 
 	"github.com/charmbracelet/x/term"
@@ -66,6 +67,14 @@ func runMirrorRecovery(args []string, supervisor bool, stdout, stderr io.Writer)
 		if _, e := mirror.PlanSessionAttachment(remote, session, id, "0123456789abcdef0123456789abcdef"); e != nil {
 			fmt.Fprintln(stderr, e)
 			return 2
+		}
+		if goruntime.GOOS == "darwin" {
+			err = mirror.RunManualSessionSupervisor(ctx, mirror.SessionSupervisorConfig{Remote: remote, Session: session, SessionID: id, Token: token, Input: os.Stdin, Output: output})
+			if err != nil {
+				fmt.Fprintf(stderr, "mirror attachment: %v\n", err)
+				return 1
+			}
+			return 0
 		}
 		local, e := mirror.StartSessionLocal(ctx, remote, runtime, token)
 		if e != nil {

@@ -10,7 +10,10 @@ permissions:
 jobs:
   go-test:
     name: Go Test
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,11 +26,16 @@ jobs:
 
       # Baseline unit/integration verification.
       - name: Run go test
-        run: go test ./...
+        run: |
+          export TMPDIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+          go test ./...
 
   go-test-race:
     name: Go Test Race
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,7 +48,9 @@ jobs:
 
       # Race detector catches shared-memory hazards before merge.
       - name: Run go test -race
-        run: go test -race ./...
+        run: |
+          export TMPDIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+          go test -race ./...
 
   golangci-lint:
     name: GolangCI Lint

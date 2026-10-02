@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -125,7 +126,7 @@ func Defaults() Config {
 			OpenDelay:       150 * time.Millisecond,
 			NiriCommand:     "niri",
 			Clipboard: MirrorClipboardConfig{
-				Enabled:      true,
+				Enabled:      runtime.GOOS == "linux",
 				Command:      "wl-paste",
 				SCPCommand:   "scp",
 				SCPOptions:   []string{},

@@ -118,7 +118,7 @@ in {
     capture = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = true;
+        default = pkgs.stdenv.isLinux;
         description = "Enable capture timer/service.";
       };
 
@@ -210,7 +210,7 @@ in {
       openDelay = lib.mkOption { type = lib.types.str; default = "150ms"; description = "Delay between local window launches."; };
       niriCommand = lib.mkOption { type = lib.types.str; default = "niri"; description = "Niri executable for owned-window operations."; };
       clipboard = {
-        enabled = lib.mkOption { type = lib.types.bool; default = true; description = "Enable mirrored image-paste bridge mapping."; };
+        enabled = lib.mkOption { type = lib.types.bool; default = pkgs.stdenv.isLinux; description = "Enable mirrored image-paste bridge mapping."; };
         command = lib.mkOption { type = lib.types.str; default = "wl-paste"; description = "Wayland clipboard reader executable."; };
         scpCommand = lib.mkOption { type = lib.types.str; default = "scp"; description = "SCP executable."; };
         scpOptions = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; description = "SCP argv options."; };
@@ -232,6 +232,9 @@ in {
     assertions = [{
       assertion = cfg.mirror.sourceWorkspace == "" || cfg.mirror.sourceHost != "";
       message = "programs.terminal-redeemer.mirror.sourceWorkspace requires mirror.sourceHost";
+    } {
+      assertion = pkgs.stdenv.isLinux || !(cfg.capture.enable || cfg.resume.onStartup || cfg.retention.prune.enable || cfg.mirror.clipboard.enabled);
+      message = "Terminal Redeemer's macOS client does not support Niri capture/recovery, pruning or the Wayland image clipboard bridge.";
     }];
 
     home.packages = [ cfg.package ];

@@ -437,7 +437,7 @@ func openChildDirectory(parent int, name string, create bool, mode uint32, requi
 			_ = unix.Close(fd)
 			return -1, err
 		}
-		if stat.Mode&unix.S_IFMT != unix.S_IFDIR || stat.Mode&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
+		if stat.Mode&unix.S_IFMT != unix.S_IFDIR || uint32(stat.Mode)&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
 			_ = unix.Close(fd)
 			return -1, fmt.Errorf("mirror %s directory must be an owned %04o directory", name, mode)
 		}
@@ -450,7 +450,7 @@ func requireRegularFile(fd int, mode uint32) error {
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return err
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || uint32(stat.Mode)&0o777 != mode || stat.Uid != uint32(os.Geteuid()) {
 		return fmt.Errorf("must be an owned %04o regular file", mode)
 	}
 	return nil

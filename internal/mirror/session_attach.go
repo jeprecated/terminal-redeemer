@@ -14,7 +14,6 @@ import (
 
 	"github.com/jmo/terminal-redeemer/internal/bootid"
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
-	"golang.org/x/sys/unix"
 )
 
 const attachmentMarkerPrefix = "\x1eREDEEM_ATTACH_V1:"
@@ -113,9 +112,8 @@ func RunSessionAttachment(ctx context.Context, cfg SessionAttachConfig) (string,
 	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Env = attachmentEnvironment(os.Environ(), pinned)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = cfg.Stdin, cfg.Stdout, cfg.Stderr
-	if state, err := unix.IoctlGetTermios(int(cfg.Stdin.Fd()), unix.TCGETS); err == nil {
-		defer unix.IoctlSetTermios(int(cfg.Stdin.Fd()), unix.TCSETS, state)
-	}
+	restore := preserveTerminal(int(cfg.Stdin.Fd()))
+	defer restore()
 	if err := startupCtx.Err(); err != nil {
 		return "failed", err
 	}

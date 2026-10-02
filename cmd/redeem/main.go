@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -53,6 +54,10 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpToken(args[0]) {
 		printHelp(stdout)
 		return 0
+	}
+	if runtime.GOOS == "darwin" && !macClientCommand(args) {
+		fmt.Fprintln(stderr, "macOS supports mirror list/open/new/session-supervisor; Niri recovery and source operations require Linux")
+		return 2
 	}
 	if args[0] == "doctor" {
 		return runDoctor(globalFlags, stdout)
@@ -1485,6 +1490,13 @@ func isHelpToken(arg string) bool {
 }
 
 func printHelp(w io.Writer) {
+	if runtime.GOOS == "darwin" {
+		writeln(w, "redeem - macOS client for remote Linux terminal sessions")
+		writeln(w, "Usage: redeem [--config PATH] mirror <list|open|new> [flags]")
+		writeln(w, "The mirror.sourceHost setting supplies the default SSH destination.")
+		writeln(w, "After a disconnect, press Enter in the view to retry its exact session.")
+		return
+	}
 	writeln(w, "redeem - terminal placement resume and remote sessions")
 	writeln(w)
 	writeln(w, "Usage:")
@@ -1503,6 +1515,13 @@ func printHelp(w io.Writer) {
 }
 
 func printMirrorHelp(w io.Writer) {
+	if runtime.GOOS == "darwin" {
+		writeln(w, "usage: redeem mirror <list|open|new> [flags]")
+		writeln(w, "  list   List live source sessions")
+		writeln(w, "  open   Pick existing sessions and open Kitty views")
+		writeln(w, "  new    Create one session on the source and open a Kitty view")
+		return
+	}
 	writeln(w, "usage: redeem mirror <command> [flags]")
 	writeln(w)
 	writeln(w, "Commands:")

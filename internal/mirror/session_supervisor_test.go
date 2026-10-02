@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -237,7 +237,7 @@ func sessionTerminalFixtureWith(t *testing.T, control SessionControl) *testSessi
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &testSessionTerminal{master: master, slave: slave, fd: int(master.Fd()), root: root, control: &testSessionControl{}, cancel: cancel, done: make(chan error, 1)}
-	original, _ := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+	original, _ := unix.IoctlGetTermios(int(slave.Fd()), terminalGetState)
 	originalFlags, _ := unix.FcntlInt(slave.Fd(), unix.F_GETFL, 0)
 	readerDone := make(chan struct{})
 	readCtx, stopRead := context.WithCancel(context.Background())
@@ -259,10 +259,13 @@ func sessionTerminalFixtureWith(t *testing.T, control SessionControl) *testSessi
 		}
 	}()
 	h.remote = RemoteConfig{Host: "isolated", SSHCommand: ssh, SnapshotCommand: []string{"redeem", "mirror", "snapshot"}}
-	local, err := StartSessionLocal(ctx, h.remote, root, "0123456789abcdef0123456789abcdef")
-	if err != nil {
-		cancel()
-		t.Fatal(err)
+	var local *SessionLocalControl
+	if runtime.GOOS == "linux" {
+		local, err = StartSessionLocal(ctx, h.remote, root, "0123456789abcdef0123456789abcdef")
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
 	}
 	cfg := SessionSupervisorConfig{Remote: h.remote, Session: "original", SessionID: zellijlive.SessionID("boot", "original", 1, 1), Token: "0123456789abcdef0123456789abcdef", Input: slave, Output: slave, Control: h.control, Local: local}
 	if control != nil {
@@ -276,11 +279,13 @@ func sessionTerminalFixtureWith(t *testing.T, control SessionControl) *testSessi
 		case <-time.After(3 * time.Second):
 			t.Error("supervisor did not stop")
 		}
-		local.Close()
-		current, _ := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+		if local != nil {
+			local.Close()
+		}
+		current, _ := unix.IoctlGetTermios(int(slave.Fd()), terminalGetState)
 		currentFlags, _ := unix.FcntlInt(slave.Fd(), unix.F_GETFL, 0)
-		if !reflect.DeepEqual(original, current) || originalFlags != currentFlags {
-			t.Errorf("terminal not restored: termios=%v flags=%v", reflect.DeepEqual(original, current), originalFlags == currentFlags)
+		if !terminalStateEqual(original, current) || !terminalFlagsEqual(originalFlags, currentFlags) {
+			t.Errorf("terminal not restored: termios=%v flags=%v (%#x -> %#x)", terminalStateEqual(original, current), terminalFlagsEqual(originalFlags, currentFlags), originalFlags, currentFlags)
 		}
 		stopRead()
 		<-readerDone

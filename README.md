@@ -11,6 +11,40 @@
 
 The Home Manager module exports the three mirror shortcuts in one opt-in Niri fragment and exports a separate opt-in recovery startup fragment. It also exports direct argv for new/open/save/apply/follow, but installs no follow service, timer, rule, or saved selection.
 
+## macOS client
+
+Apple Silicon and Intel macOS can use `mirror list`, `mirror open`, and
+`mirror new` against a Linux source running a compatible Redeemer. Install
+Kitty locally and verify ordinary SSH access first. Redeemer reuses your SSH
+configuration and agent; it does not provision credentials.
+
+```yaml
+mirror:
+  sourceHost: source-example
+  launcherCommand: kitty
+```
+
+Place this in `~/.config/terminal-redeemer/config.yaml`, then run
+`redeem mirror open` to pick a session or `redeem mirror new` to create one.
+Use an absolute `launcherCommand` if Kitty is not on your PATH. With Home Manager,
+enable `programs.terminal-redeemer` and set `mirror.sourceHost`; capture and
+the Wayland clipboard bridge default off on macOS.
+
+The native client retains the exact-session attach protocol and discards input
+typed or pasted while disconnected. After a connection drops, **press Enter to
+reconnect to the same session incarnation**. It does not run Linux's shared
+automatic recovery coordinator. Closing the view leaves the source session alive.
+If that incarnation ends, use the picker or explicitly create a new session;
+retry never creates or adopts another session with the same name.
+
+Niri capture/resume, pruning, pinned sets, workspace following, forwarding and
+the Wayland image-paste bridge remain Linux-only. A macOS client is not a source.
+The remaining documentation describes the full Linux workflow unless noted.
+
+Native validation: `TMPDIR=/private/tmp go test ./...`. PTY restoration tests
+ignore only macOS's kernel-maintained `FWASWRITTEN` and `PENDIN` state bits,
+not application-controlled terminal modes or file status flags.
+
 ## Remote sessions
 
 ```bash

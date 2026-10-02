@@ -14,8 +14,6 @@ import (
 	"github.com/jmo/terminal-redeemer/internal/zellijlive"
 )
 
-const testAttachmentAttempt = "0123456789abcdef0123456789abcdef"
-
 func relayFixture(t *testing.T) (*attachmentRelay, *net.UnixListener, func() net.Conn) {
 	t.Helper()
 	base, id, server := attachmentSocketFixture(t, "s", "boot")

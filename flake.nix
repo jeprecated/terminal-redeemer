@@ -11,7 +11,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, home-manager }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-darwin" "x86_64-darwin" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
       in {
@@ -23,10 +23,14 @@
           vendorHash = "sha256-hYELoFa+ppt/C6GM+ld+bZS9xSJoBGauwLWEu1UQxnM=";
           subPackages = [ "cmd/redeem" ];
 
+          preCheck = pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+            export TMPDIR="$(cd "$TMPDIR" && pwd -P)"
+          '';
+
           meta = with pkgs.lib; {
             description = "CLI for terminal placement resume and remote sessions";
             license = licenses.mit;
-            platforms = platforms.linux;
+            platforms = platforms.linux ++ platforms.darwin;
             mainProgram = "redeem";
           };
         };
@@ -52,7 +56,15 @@
           ];
         };
 
-        checks.packaged-cli = pkgs.runCommand "terminal-redeemer-packaged-cli" { } ''
+        checks = {
+        packaged-cli = pkgs.runCommand "terminal-redeemer-packaged-cli" { } (if pkgs.stdenv.isDarwin then ''
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem --help | grep -q 'macOS client'
+          ${self.packages.${system}.terminal-redeemer}/bin/redeem mirror new --host source-example --dry-run > plan
+          grep -q 'source-example' plan
+          grep -q 'session-supervisor' plan
+          if ${self.packages.${system}.terminal-redeemer}/bin/redeem capture once; then exit 1; fi
+          touch "$out"
+        '' else ''
           ${self.packages.${system}.terminal-redeemer}/bin/redeem --help > root-help
           grep -q "Refresh this boot's rolling terminal checkpoint" root-help
           grep -q "Restore prior-boot placement or reconcile all recovery sessions" root-help
@@ -76,9 +88,38 @@
           grep -q -- "same boot: reconcile all exact ACTIVE sessions" resume-help
           grep -q -- "maximum age for prior dead-session resurrection" resume-help
           touch "$out"
-        '';
+        '');
 
-        checks.hm-module-eval =
+      } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
+        hm-client-eval =
+          let
+            home = home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                self.homeManagerModules.terminal-redeemer
+                {
+                  home.username = "test";
+                  home.homeDirectory = "/Users/test";
+                  home.stateVersion = "24.05";
+                  programs.terminal-redeemer = {
+                    enable = true;
+                    package = self.packages.${system}.terminal-redeemer;
+                    mirror.sourceHost = "source-example";
+                  };
+                }
+              ];
+            };
+            cfg = home.config.programs.terminal-redeemer;
+          in
+          assert pkgs.lib.all (entry: entry.assertion) home.config.assertions;
+          assert !cfg.capture.enable && !cfg.resume.onStartup && !cfg.retention.prune.enable;
+          assert !cfg.mirror.clipboard.enabled;
+          assert cfg.renderedConfig.mirror.sourceHost == "source-example";
+          assert !(home.config.systemd.user.services ? terminal-redeemer-capture);
+          assert cfg.mirror.openCommand == [ (pkgs.lib.getExe cfg.package) "mirror" "open" "--host" "source-example" ];
+          pkgs.runCommand "terminal-redeemer-hm-client-eval" { } ''touch "$out"'';
+      } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        hm-module-eval =
           let
             hmCfg = home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
@@ -221,7 +262,7 @@
           '';
 
 
-        checks.hm-module-prune-default-disabled =
+        hm-module-prune-default-disabled =
           let
             hmCfg = home-manager.lib.homeManagerConfiguration {
               inherit pkgs;
@@ -265,7 +306,7 @@
           assert !(pkgs.lib.hasInfix ''"mirror" "follow"'' cfg.programs.terminal-redeemer.mirror.niriIntegrationFragment);
           hmCfg.activationPackage;
 
-        checks.nixos-module-eval =
+        nixos-module-eval =
           let
             nixosCfg = nixpkgs.lib.nixosSystem {
               inherit system;
@@ -306,6 +347,7 @@
           pkgs.runCommand "nixos-module-eval" { } ''
             touch "$out"
           '';
+      };
       })
     // {
       homeManagerModules.terminal-redeemer = { pkgs, ... }: {

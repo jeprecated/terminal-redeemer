@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,7 +30,7 @@ func TestSessionSupervisorSignalProcess(t *testing.T) {
 		return
 	}
 	fd := int(os.Stdin.Fd())
-	original, _ := unix.IoctlGetTermios(fd, unix.TCGETS)
+	original, _ := unix.IoctlGetTermios(fd, terminalGetState)
 	flags, _ := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 	control := &testSessionControl{permits: 1}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP)
@@ -48,9 +47,10 @@ func TestSessionSupervisorSignalProcess(t *testing.T) {
 		return reply, err
 	})
 	_ = RunSessionSupervisor(ctx, cfg)
-	current, termErr := unix.IoctlGetTermios(fd, unix.TCGETS)
+	current, termErr := unix.IoctlGetTermios(fd, terminalGetState)
 	currentFlags, _ := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
-	if (termErr == nil && !reflect.DeepEqual(original, current)) || flags != currentFlags {
+	if (termErr == nil && !terminalStateEqual(original, current)) || !terminalFlagsEqual(flags, currentFlags) {
+		_ = os.WriteFile(filepath.Join(root, "restore-error"), []byte(fmt.Sprintf("termios: %+v -> %+v; flags: %#x -> %#x", original, current, flags, currentFlags)), 0600)
 		os.Exit(8)
 	}
 	os.Exit(0)
@@ -106,7 +106,8 @@ func TestSessionSupervisorSignalAndTerminalCloseReapChild(t *testing.T) {
 			select {
 			case err := <-exited:
 				if err != nil {
-					t.Fatalf("helper cleanup/restore: %v", err)
+					message, _ := os.ReadFile(filepath.Join(root, "restore-error"))
+					t.Fatalf("helper cleanup/restore: %v: %s", err, message)
 				}
 			case <-time.After(3 * time.Second):
 				t.Fatal("helper ignored terminal close/signal")

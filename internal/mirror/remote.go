@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -55,6 +56,9 @@ func AcquireRemote(ctx context.Context, runner Runner, cfg RemoteConfig) (Snapsh
 	// Custom runners retain their existing deterministic IO seam.
 	switch runner.(type) {
 	case ExecRunner, *ExecRunner:
+		if runtime.GOOS == "darwin" {
+			break
+		}
 		local, stop := context.WithTimeout(ctx, time.Second)
 		client := &SessionRecoveryClient{Remote: cfg}
 		status, found, statusErr := client.ExistingStatus(local)
